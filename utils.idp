@@ -1,0 +1,324 @@
+func int rand(real[int, int]& A, real mu, real sd){
+	for(int j = 0; j < A.m; j++){
+		for(int i = 0; i < A.n; i++){
+			real U1 = randreal3(); // Uniform random number in (0, 1)
+			real U2 = randreal3(); // Another uniform random number in (0, 1)
+
+			// Box-Muller transform
+			real Z1 = sqrt(-2 * log(U1)) * cos(2 * pi * U2);
+			A(i,j) = mu + sd*Z1;
+		}
+	}
+}
+
+func real[int] asvector(real[int,int]& A){
+	real[int] vec(A.n*A.m);
+	int index = 0;
+	for (int j = 0; j < A.m; j++) {
+    	for (int i = 0; i < A.n; i++) {
+        	vec[index] = A(i, j);
+        	index++;
+    	}
+    }
+    return(vec);
+}
+
+func matrix diag(real[int] diagVals, int shift, int size) {
+    // Determine the size of the matrix
+	
+    matrix mat(size, size); // Initialize a zero matrix of given size
+	//mat = 0.;
+    // Fill the shifted diagonal
+    for (int i = 0; i < diagVals.n; ++i) {
+        int row = i;
+        int col = i + shift;
+        if (row >= 0 && row < size && col >= 0 && col < size) {
+            mat(row, col) = diagVals[i];
+        }
+    }
+
+    return mat;
+}
+
+func matrix eye(int n){
+	real[int] ones(n);
+	ones = 1.;
+	return(diag(ones, 0 , n));
+}
+
+//column major
+func real[int,int] asmatrix(real[int]& vec, int nrow, int ncol){
+	real[int,int] A(nrow, ncol);
+	int index = 0;
+	for (int j = 0; j < ncol; j++) {  // Loop over columns
+    	for (int i = 0; i < nrow; i++) {  // Loop over rows
+        	A(i, j) = vec[index];
+        	index++;
+    	}
+    }
+    return(A);
+}
+
+func real[int, int] KRON(matrix& A, int k){
+
+	int n = A.n, m = A.m;       // Dimensions of A
+	real[int,int] K(k * n, k * m);     // Resulting Kronecker product matrix
+	K = 0;
+	// Construct Kronecker product
+	for (int i = 0; i < k; i++) {
+    	for (int j = 0; j < k; j++) {
+     	   if (i == j) {  // Identity matrix block
+        	    for (int p = 0; p < n; p++) {
+        	        for (int q = 0; q < m; q++) {
+        	            K(i * n + p, j * m + q) = A(p, q);
+        	        }
+        	    }
+       	 }
+    	}
+	}
+	return(K);
+}
+
+func matrix kronecker(matrix A, matrix B) {
+    int m = A.n; // Number of rows in A
+    int n = A.m; // Number of columns in A
+    int p = B.n; // Number of rows in B
+    int q = B.m; // Number of columns in B
+
+    matrix K(m * p, n * q); // Resulting Kronecker product matrix
+
+    // Fill the Kronecker product matrix
+    for (int i = 0; i < m; ++i) {
+        for (int j = 0; j < n; ++j) {
+            for (int k = 0; k < p; ++k) {
+                for (int l = 0; l < q; ++l) {
+                    K(i * p + k, j * q + l) = A(i, j) * B(k, l);
+                }
+            }
+        }
+    }
+    return K;
+}
+
+func int writeTable(real[int, int]& Mat, string filename){
+	ofstream file(filename);
+	for( int i =0; i < Mat.n; i++){
+		for(int j = 0; j < Mat.m-1; j++){
+		file << Mat(i,j) << " ";
+		}
+	file << Mat(i,Mat.m-1) << endl;
+	}
+}
+
+func int printTable(real[int, int]& Mat){
+	for( int i =0; i < Mat.n; i++){
+		for(int j = 0; j < Mat.m-1; j++){
+		cout << Mat(i,j) << " ";
+		}
+	cout << Mat(i,Mat.m-1) << endl;
+	}
+}
+
+func real[int, int] readTable(string filename, int nrow, int ncol){
+	real[int, int] Mat(nrow, ncol);
+	ifstream file(filename);
+    string line;
+    // Read by line.
+    for (int i = 0; i < nrow; i++){
+    	for(int j = 0; j < ncol; j++){
+    		file >> Mat(i,j);
+  		}
+	}
+	return(Mat);
+}
+
+//matrix C; C.resize(3,3);
+
+/*
+for(int i=0; i<3; i++){
+	for(int j=0; j<3; j++){	
+	 C(i,j) = i+j;
+	 }
+}
+*/
+
+func matrix buildPsi(real[int, int]& locs, mesh& Th){
+
+fespace Vh(Th,P1); 
+int Ndofs = Vh.ndof;
+
+Vh u = 0;
+matrix Psi; Psi.resize(locs.n, Ndofs);
+for (int i = 0; i < Ndofs; i++){
+    u[][i] = 1; // set basis function i to 1
+    //loop over locations 
+    for (int j = 0; j < locs.n; j++){
+        real xLoc = locs(j,0);
+        real yLoc = locs(j,1);
+        real PsiIJ = u(xLoc, yLoc);
+        Psi(j, i) = PsiIJ;
+    }
+    u[][i] = 0; // reset basis function i to 0
+}
+return(Psi);
+}
+
+// Functional --------------------------------------------------------------------------------------
+
+func real J(real[int,int]& solution, real[int,int]& misfit, real[int,int]& observations, real[int, int]& locs, 
+		    real beta, int Ndofs, int Nt, mesh& Th){ // U = [asvector(solution), asvector(misfit), asvector(control)]
+	
+	int Nlocs = locs.n;
+	fespace Vh(Th, P1); 
+	real SSE=0.; 
+	real NORM=0.; 
+	
+	for(int t = 0; t < Nt; t++){
+		Vh tmp;
+		tmp[] = solution(0:Ndofs-1, t);
+		
+		for(int i=0; i < Nlocs; i++){
+		 SSE = SSE + (tmp(locs(i,0), locs(i,1)) - observations(i,t))^2;
+		}
+		
+		for( int j = 0; j < Ndofs; j++){
+			NORM = NORM + misfit(j,t)^2;
+		}
+	}
+	// cout << " \t J = " << SSE/2 << " + " << beta/2*NORM << endl;
+	cout << endl;
+	cout << " \t SSE = " << (SSE/2) << endl; 
+	cout << " \t NORM2 = " <<  (beta/2*NORM) << endl;
+	cout << " \t J = " <<  (SSE/2 + beta/2*NORM) << endl;
+	cout << endl; 
+	//return (1/(2*Nt*Nlocs[n])*SSE + lambda/2*mis);
+	return (SSE/2 + beta/2*NORM);
+}
+										   // U = [asvector(solution), asvector(misfit), asvector(control)]
+func real[int] DJ(real[int, int]& misfit, real[int, int]& control, real beta, matrix& M, 
+				  int Ndofs, int Nt, real dt){ //, real[int,int]& u, real[int,int]& p){
+	real[int] mis = asvector(misfit);
+	real[int] ctrl = asvector(control);
+	
+	real[int, int] Mt = KRON(M, Nt);
+	/*
+	for(int i=0; i < Ndofs; i++){
+		for(int j=0; j < Ndofs; j++){
+			Mt(i,j) = Mt(i,j) / 2;
+		}
+	}
+	
+	for(int i=(Ndofs)*(Nt-1); i < Ndofs*Nt; i++){
+		for(int j=(Ndofs)*(Nt-1); j < Ndofs*Nt; j++){
+			Mt(i,j) = Mt(i,j) / 2;
+		}
+	}
+	*/
+	mis = Mt * mis;
+	mis = beta * mis;
+	//mis = dt * mis;
+	
+	ctrl = Mt * ctrl;
+	//ctrl = dt*ctrl;
+	 
+	real[int] res = mis - ctrl;
+	return(res);
+}
+
+
+// Optim -------------------------------------------------------------------------------------------
+
+func real[int] BFGS(real[int]& U, real[int]& Uold, real[int]& gradU, real[int]& gradUold,
+					 matrix& H){
+	
+	real[int] delta = U - Uold; //Vedi... non lo fa con linesearch .... sei un pollo 
+	real[int] gamma = gradU - gradUold;
+	real du = delta' * gamma;
+	real[int] Hu = H*gamma;
+	cout << "BFGS du " << du << endl;
+	// 1.
+	real coef1 =  gamma' * Hu;
+	coef1 = coef1 / du;
+	coef1 = 1 + coef1;
+	matrix update1 = delta*delta';
+	update1 = 1/du * update1;
+	update1 = coef1 * update1;
+	
+	// 2.
+	matrix update2 = Hu*delta';
+	matrix upTmp2 = delta*Hu';
+	update2 = update2 + upTmp2;
+	update2 = 1/du * update2;
+	
+	// update H
+	H = H + update1;
+	H = H - update2;
+	
+	//Uold = U;
+	//gradUold = gradU;
+	
+	real[int] res = H * gradU;
+	res = -res;
+	return(res);
+}
+
+func real[int] GD(real[int]& gradUold){
+	real[int] res = -gradUold;
+	return(res);
+}
+
+/*
+func real backtracking(real[int]& U, real[int]& gradU, real[int]& dir, real beta, 
+					   real[int] p, real alpha0, real c1, real rho) {
+    real alpha = 1., alphamax = 0, alphamin = 0, c1 =1e-4, c2=0.9;
+    
+    real lossnew, lliknew, pen_new, slope;
+    real grad_dir = gradU'*dir;
+    grad_dir = c1*alpha*grad_dir;
+    
+   	real[int] gradnew(gradU.n), new_point(U.n);
+   	
+   	new_point = alpha * dir;
+   	new_point = U + new_point;
+   	
+	   	
+   		
+   	real fx = f(x);
+    real grad_dot_p = (grad_f(x)' * p); // Compute gradient dot product with direction
+
+    while (f(x + alpha * p) > fx + c1 * alpha * grad_dot_p) {
+        alpha *= rho; // Reduce alpha
+    }
+
+    return alpha; // Return the step size
+}
+*/
+
+
+
+func real[int] CG(real[int]& Dold, real[int]& gradU, real[int]& gradUold){
+	//Fletcher-Reeves
+	/*
+	real num = gradU' * gradU;
+	real den = gradUold' * gradUold;
+	*/
+	
+	//Polak-Ribiere
+	real[int] tmp = (gradU - gradUold);
+	real num = gradU' * tmp; 
+	real den = gradUold' * gradUold;
+	
+	real beta = num/den;
+	beta = max(0.,beta);
+	
+	real[int] update = beta*Dold; // invece che Uold potrebbe essere "dirOld";
+	
+	real[int] res = -gradUold;
+	res = res + update;
+	return(res);
+}
+
+
+
+
+

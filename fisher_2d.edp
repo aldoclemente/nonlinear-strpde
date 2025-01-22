@@ -1,0 +1,462 @@
+load "ffrandom"
+load "lapack"
+//load "fflapack"
+
+srandomdev();
+
+include "utils.idp"
+real quadratureOrder = 7;
+
+string datadir = "data/";
+
+real a = -2.5;
+real b = 2.5;
+
+int n = 16;
+mesh Th = readmesh(datadir + "square.mesh");
+
+//plot(Th, wait = true);
+
+fespace Vh(Th, P1); 
+Vh uh, vh, uh0 = ((x)^2+(y)^2)<=1;
+Vh f0 = ((x)^2+(y)^2)<=1;
+int Ndofs = Vh.ndof;
+
+
+cout.precision(17);
+
+real mu = 0.1, k = 3.0; //3.0;
+
+real Tf = 1.0;
+//dt = 0.1;
+int Nt;
+ifstream file(datadir + "Nt.txt");
+file >> Nt;
+//int Nt = 21;
+real dt = Tf / (Nt - 1);
+
+cout << dt << " " << Nt << endl; 
+macro Grad(u)[dx(u),dy(u)]//
+
+real[int] Nlocs = [250];//[100, 250, 500, 1000];
+int nsim = 1;
+
+for( int n=0; n<Nlocs.n; n++){
+string resdir = datadir + Nlocs[n] + "/"; 
+
+for(int sim=0; sim < nsim; sim++){
+
+string tmpdir = resdir + sim + "/"; 
+
+real[int, int] locs = readTable(tmpdir + "locs.txt", Nlocs[n],2); 
+real[int,int] observations= readTable( tmpdir+ "obs.txt", Nlocs[n], Nt);
+
+// ------------------------------------------------------------------------------------------------
+//lambda = 1./(Nlocs[n]*Nt); //1e-3; // 100. 
+//lambda * Nlocs[n] * Nt;
+
+real beta = 1.;
+//real lambda = beta / (Nlocs[n] * Nt);
+real lambda = beta;
+Vh u = 0;
+matrix Psi = buildPsi(locs, Th); 
+matrix PsiTPsi = Psi'*Psi;
+
+real[int,int] solution(Ndofs, Nt);
+real[int,int] control(Ndofs, Nt);
+real[int,int] adjoint(Ndofs, Nt);
+
+solution=0;
+adjoint=0;
+control = 1.;
+
+
+rand(control, 0, 0.25);
+for(int i = 0; i < Nt; i++){
+	control(:, i) = exp(- (dt*i)) * control(:,i);
+}
+
+// nell'ottica che control(
+control(:,Nt-1) = 0;
+
+
+int imin, jmin;
+ijmin(solution, imin, jmin);
+int imax, jmax;
+ijmax(solution, imax, jmax);
+cout << "solution (min, max) " << solution(imin,jmin) << " " << solution(imax, jmax) << endl;
+
+solution(:, 0) = f0[];
+
+ijmin(solution, imin, jmin);
+ijmax(solution, imax, jmax);
+cout << "solution (min, max) " << solution(imin,jmin) << " " << solution(imax, jmax) << endl;
+
+ijmin(adjoint, imin, jmin);
+ijmax(adjoint, imax, jmax);
+cout << "adjoint (min, max) " << adjoint(imin,jmin) << " " << adjoint(imax, jmax) << endl;
+
+
+//control = control / 4;
+ijmin(control, imin, jmin);
+ijmax(control, imax, jmax);
+cout << "control (min, max) " << control(imin,jmin) << " " << control(imax, jmax) << endl;
+ 
+// ---
+varf stiff(uh, vh) = int2d(Th)(Grad(uh)'*Grad(vh)*mu) - int2d(Th)(k*vh*uh);
+varf mass(uh,vh) = int2d(Th)(vh*uh);
+
+uh0 = 0;
+varf reac(uh, vh) = int2d(Th)(k*uh0*uh*vh);
+
+matrix M = mass(Vh,Vh);
+matrix A = stiff(Vh,Vh);
+// ---
+
+
+func int State(real[int, int]& solution, real[int,int]& control){
+	
+	for(int t = 0; t < Nt-1; t++){
+	//cout << "\t 	 t = " << (t+1)*dt << endl;
+	uh0[] = solution(:, t);
+	matrix R = reac(Vh,Vh);
+	
+	matrix S = 1/dt*M + A + R;
+    set(S, solver = UMFPACK);   
+	
+	real[int] rhs = M*solution(:, t);
+	rhs = rhs / dt;
+	
+	real[int] tmp = M*control(:, t+1);
+	rhs = rhs + tmp;
+	
+	solution(0:Ndofs-1, t+1) = S^-1 * rhs;
+	}	
+}
+
+func int Adjoint(real[int,int]& solution, real[int,int]& adjoint){
+
+	for(int t = Nt-1; t > 0; t--){
+	//cout << "\t 	t = " << (t-1)*dt << endl;	
+	uh0[] = solution(:, t-1); // commento sotto 
+	matrix R = reac(Vh,Vh);
+	
+	matrix S = 1/dt*M + A + 2*R; // andrebbero trasposte A e 2*R
+	//S = lambda * S;
+	//matrix S = 1/dt*M ; // + A + 2*R; // andrebbero trasposte A e 2*R
+    set(S, solver = UMFPACK);   
+	
+	real[int] rhs = M*adjoint(:, t);
+	rhs = 1/dt*rhs;
+	//real[int] rhs2 = A*adjoint(:, t);
+	//rhs = rhs - rhs2;
+	//real[int] rhs3 = R*adjoint(:,t);
+	//rhs2 = 2* rhs3;
+	//rhs = rhs - rhs3;
+	real[int] tmp = PsiTPsi*solution(:, t-1); // solution a t-1
+	tmp = 1./(Nt*Nlocs[n]) * tmp;
+	
+	real[int] tmp2 = Psi'*observations(:, t-1); // osservazioni a t-1 !? 
+	tmp2 = 1./(Nt*Nlocs[n]) * tmp2; 
+	rhs = rhs - tmp;
+	rhs = rhs + tmp2;
+	adjoint(:, t-1) = S^-1 * rhs;
+	}
+}
+
+func int Step(real[int,int]& solution, real[int, int]& control, real[int,int]& adjoint,
+			  real& Jnew, real[int]& gradJnew){
+	State(solution, control);
+	Adjoint(solution, adjoint);
+	
+	Jnew = J(solution, control, observations, locs, beta, Ndofs, Nt, Th);
+	gradJnew = DJ(control, adjoint, beta, M, Ndofs, Nt, dt);
+}
+
+// Alla STRPDE (iterativo) Massardi-Spaziani
+func int initialize(real[int, int]& solution, real[int,int]& control){
+	
+	for(int t = 0; t < Nt-1; t++){
+	//cout << "\t 	 t = " << (t+1)*dt << endl;
+	uh0[] = solution(:, t);
+	matrix R = reac(Vh,Vh);
+	
+	matrix block21 = A + R;
+	matrix block12 = A + 2*R; // aggiunto !
+	matrix block11 = PsiTPsi;
+	matrix block22 = -M;
+	
+	matrix S = [[block11 , block12], [block21, block22]];
+    set(S, solver = UMFPACK);   
+	
+	real[int] rhs1(Ndofs);
+	rhs1 = Psi' * observations(:,t+1);
+	real[int] rhs2(Ndofs);
+	rhs2 = 0.;
+	
+	real[int] rhs = [rhs1, rhs2];
+	real[int] guess = S^-1 * rhs;
+	for(int i = 0; i < Ndofs; i++) solution(i, t+1) = guess[i];	
+	}
+	
+	Adjoint(solution, control);
+}
+
+func real backtracking(real[int]& U, real[int]& gradU, real[int]& dir, 
+					   real J) {
+	cout << "\t \t Backtracking " << endl; 
+	real alpha = 1., alphamax = 0, alphamin = 0, c1 =1e-4, c2=0.9;
+    
+    real Jnew, slope;
+    real gradDir = gradU'*dir;
+    slope = c1*alpha*gradDir;
+    
+   	real[int] gradJnew(gradU.n), Unew(U.n);
+   	
+   	Unew = alpha * dir;
+   	Unew = U + Unew;
+	
+	real[int,int] solutionTmp = solution;
+	real[int,int] controlTmp = asmatrix(Unew, Ndofs, Nt);
+	real[int,int] adjointTmp = adjoint;
+	
+	Step(solutionTmp, controlTmp, adjointTmp, Jnew, gradJnew);
+	
+	bool again = true;
+	int maxiter = 30;
+	int iter = 0;	
+	while(again){ //&& iter < maxiter){
+		again = false;
+		
+		int inneriter = 0;
+		//cout << "\t J    = " << J << endl;
+		//cout << "\t Jnew = " << Jnew << endl;
+		//cout << "\t slope= " << slope << endl;
+		cout << "\t Jnew > J + slope "<< J > (Jnew +slope) << endl;
+	 	while( Jnew > (J + slope) && inneriter < maxiter){
+		cout << "\t alpha: " << alpha << endl;
+		alphamax = alpha;
+		alpha = 0.5*(alphamin + alphamax);
+		Unew = alpha * dir;
+   		Unew = U + Unew;
+   		
+   		real[int,int] solutionTmp = solution;
+		real[int,int] controlTmp = asmatrix(Unew, Ndofs, Nt);
+		real[int,int] adjointTmp = adjoint;
+		Step(solutionTmp, controlTmp, adjointTmp, Jnew, gradJnew);
+		slope = c1*alpha*gradDir;
+		//cout << "\t J    = " << J << endl;
+		//cout << "\t Jnew = " << Jnew << endl;
+		//cout << "\t slope= " << slope << endl;
+		cout << "\t Jnew > J + slope "<< J > (Jnew +slope) << endl;
+		inneriter = inneriter + 1;
+		cout << "\t inner iter: " << inneriter << endl; 
+		}
+		
+		//real tmp1 =  gradJnew'*dir;
+		//real tmp2 = 
+		bool check1 = gradJnew'*dir < c2*gradDir;
+		//bool check1 = abs(gradJnew'*dir) < c2*abs(gradDir); // STRONG WOLFE CONDTIONS
+		bool check2 = abs(gradDir) > 1e-2;
+		cout << "\t check1 && check2 "  << check1 && check2 << endl; 
+		if( check1 && check2){
+			
+			again = true;
+			alphamin = alpha;
+			if(alphamax == 0){
+				alpha = 2*alphamin;
+			}else{
+				alpha = 0.5*(alphamin + alphamax);
+			}
+			cout << "\t alpha: " << alpha << endl;
+		
+			Unew = alpha * dir;
+   			Unew = U + Unew;
+   			
+   			real[int,int] solutionTmp = solution;
+			real[int,int] controlTmp = asmatrix(Unew, Ndofs, Nt);
+			real[int,int] adjointTmp = adjoint;
+			Step(solutionTmp, controlTmp, adjointTmp, Jnew, gradJnew);
+			slope = c1*alpha*gradDir;
+			}
+			iter = iter + 1;
+			cout << "\t backtracking iter: "<< iter <<endl;
+		}
+		cout << "\t Backtracking ends" << endl;
+		return alpha;
+}
+
+
+// Solve State Problem (Semi-implicit Euler)
+/*
+real[int,int] TEMP = readTable("fisher_iterative/250/misfit.txt", Ndofs*Nt, 1);
+real[int] TMP(Ndofs*Nt);
+for(int i =0; i < Ndofs*Nt; i++)TMP[i] = TEMP(i,0);
+
+control = asmatrix(TMP, Ndofs, Nt);
+*/
+
+cout << "\t - - - initial guess u0 - - -" << endl;
+//initialize(solution, control);
+//ijmin(control, imin, jmin);
+//ijmax(control, imax, jmax);
+cout << "control (min, max) " << control(imin,jmin) << " " << control(imax, jmax) << endl;
+//
+
+cout << "\t - - - init state - - -" << endl;
+State(solution, control);
+//Solve Adjoint Problem (Back-ward Euler)
+cout << "\t - - - init adjoint - - -" << endl;
+Adjoint(solution, adjoint);
+
+ijmin(solution, imin, jmin);
+ijmax(solution, imax, jmax);
+cout << "solution (min, max) " << solution(imin,jmin) << " " << solution(imax, jmax) << endl;
+
+ijmin(control, imin, jmin);
+ijmax(control, imax, jmax);
+cout << "control (min, max) " << control(imin,jmin) << " " << control(imax, jmax) << endl;
+
+ijmin(adjoint, imin, jmin);
+ijmax(adjoint, imax, jmax);
+cout << "adjoint (min, max) " << adjoint(imin,jmin) << " " << adjoint(imax, jmax) << endl;
+
+
+
+// ---
+int iter = 0;
+int maxiter = 100;
+real err = 1.0;
+real tol = 1e-6;
+// --- per BFGS ------------------------------------------------------------------------------------
+
+matrix H = eye(Ndofs*Nt);
+
+real[int] U = asvector(control); // 
+real[int] Uold = U; 
+real[int] D(Ndofs * Nt); //descent direction
+D = 0.;
+real[int] Dold = D;
+// Evaluate J and DJ;
+real Jold = J(solution, control, observations, locs, beta, Ndofs, Nt, Th);
+real Jnew = Jold;
+real[int] DJold = DJ(control, adjoint, beta, M, Ndofs, Nt, dt); 
+real[int] DJnew = DJold;
+
+
+while(  err > tol  &&  iter < maxiter){
+	
+	cout << "\t --- iter " << iter + 1  << " ---" <<endl; 
+	
+	
+	DJold = DJnew;
+	
+	// Gradient Descent ---------------------------------------------------------------------------- 
+	/*
+	D = GD(DJold); // descent direction
+	
+	real alpha = backtracking(U, DJold, D, Jold);
+	
+	U = Uold + alpha*D;
+	Uold = U;
+	
+	control = asmatrix(U, Ndofs, Nt);
+	*/	
+
+	// Conjugate - Gradiente -----------------------------------------------------------------------
+	/*
+	if(iter == 0){
+		D = GD(DJold);
+		Dold = D;
+	}else{
+		D = CG(Dold, DJnew, DJold);
+		Dold = D;		
+	}
+	real alpha = backtracking(U, DJold, D, Jold);
+	U = Uold + alpha*D;
+	Uold = U;
+	//DJold = DJnew;
+	control = asmatrix(U, Ndofs, Nt);
+	*/
+	
+	// BFGS ----------------------------------------------------------------------------------------
+	D = H*DJold;
+	D = -D;
+	real alpha = backtracking(U, DJold, D, Jold);
+	D = alpha * D;
+	
+	U = Uold + D;
+	Uold = U;
+	
+	control = asmatrix(U, Ndofs, Nt);
+	
+	ijmin(control, imin, jmin);
+	ijmax(control, imax, jmax);
+	cout << "control (min, max) " << control(imin,jmin) << " " << control(imax, jmax) << endl;
+	
+	// ---------------------------------------------------------------------------------------------
+	
+	// solve state
+	//cout << "\t - - - solving state - - -" << endl;
+	Step(solution, control, adjoint, Jnew, DJnew);
+	
+	ijmin(solution, imin, jmin);
+	ijmax(solution, imax, jmax);
+	cout << "solution (min, max) " << solution(imin,jmin) << " " << solution(imax, jmax) << endl;
+
+	
+	ijmin(adjoint, imin, jmin);
+	ijmax(adjoint, imax, jmax);
+	cout << "adjoint (min, max) " << adjoint(imin,jmin) << " " << adjoint(imax, jmax) << endl;
+	
+	// UPDATE Hessian^-1 --------------------------------------------------------------------
+	cout << "\t - - - updating Hessian - - -" << endl;
+	real[int] y = DJnew - DJold;
+	real[int] Hy = H * y;
+	real coef = D'*y;
+	
+	// update 1 
+	matrix Update1 = D*D';
+	
+	real coef2 = y'*Hy;
+	real coefUp1 = 1./coef + coef2/coef^2;
+	Update1 = coefUp1 * Update1;
+	
+	// update 2
+	matrix Update2 = Hy * D';
+	matrix Update22 = D*Hy';
+	Update2 = Update2 + Update22;
+	Update2 = 1/coef * Update2;
+	
+	H = H + Update1;
+	H = H - Update2;
+	// ---------------------------------------------------------------------------------------------
+	
+	cout << "\t Jold " << Jold << endl;	
+	cout << "\t Jnew " << Jnew << endl;
+	err = abs(Jnew - Jold)/ abs(Jold);
+ 	cout << "\t err " << err << endl;
+
+ 	Jold = Jnew;
+ 	iter = iter + 1;
+ 	
+}
+
+string estdir = tmpdir + "lambda_" + lambda + "/";
+exec("mkdir -p " + estdir);
+
+/*
+for( int t = 0; t < Nt; t++){
+	ofstream file(estdir + "aldo_"+t+".txt");
+	for( int i =0; i < Ndofs; i++){
+		file << solution(i,t)  << endl;
+	}
+}
+*/
+writeTable(solution, estdir + "iterative.txt");
+ 
+}
+}
+
+
+

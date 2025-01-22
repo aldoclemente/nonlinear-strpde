@@ -1,0 +1,120 @@
+load "ffrandom"
+load "lapack"
+//load "fflapack"
+
+srandomdev();
+
+include "utils.idp"
+real quadratureOrder = 7;
+real lambda = 1e-3; // 100. 
+
+real a = -2.5;
+real b = 2.5;
+
+int n = 16;
+
+string datadir = "data/";
+exec("mkdir -p " + datadir);
+
+mesh Th=square(n,n, [a + (b-a)*x, a + (b-a)*y]);
+string dataname = datadir + "square.mesh";
+savemesh(Th, dataname);
+
+//plot(Th, wait = true);
+
+fespace Vh(Th, P1); 
+Vh uh, vh, uh0 = ((x)^2+(y)^2)<=1;
+
+int Ndofs = Vh.ndof;
+
+
+cout.precision(2);
+
+real mu = 0.1, k = 3.0; //3.0;
+
+real Tf = 1.0, dt = 0.1;
+int Nt = Tf / dt + 1;
+
+{
+	ofstream file(datadir + "Nt.txt");	
+	file << Nt << endl;
+}
+//int Nt = 21;
+
+cout << dt << " " << Nt << endl; 
+macro Grad(u)[dx(u),dy(u)]//
+
+// estimate solution
+problem KFisher(uh,vh) = int2d(Th)(uh*vh/dt + Grad(uh)'*Grad(vh)*mu) - int2d(Th)(uh0*vh/dt) + int2d(Th)(k*uh0*uh*vh) - int2d(Th)(k*vh*uh);
+
+real[int,int] exact(Ndofs, Nt);
+exact = 0.;
+
+for (int t=0;t<Nt;t++)  
+{ 
+  exact(0:Ndofs-1,t) = uh0[];
+  KFisher;
+  
+  ofstream file(datadir + "fisher_" + t + ".txt");
+  for( int i =0; i < Vh.ndof; i++){
+	file << uh0[][i] << endl;
+  }
+
+  
+  uh0 = uh;
+  
+  plot(uh0, cmm="t="+t+"[sec]", dim=2, fill=true, value=true, wait=0); 
+}
+
+writeTable(exact, datadir + "exact.txt");
+
+// --- 
+real[int] Nlocs = [100, 250, 500, 1000];
+int nsim = 30;
+
+{
+	ofstream file(datadir + "Nlocs.txt");
+	file << Nlocs << endl;
+}
+
+for( int n=0; n<Nlocs.n; n++){
+
+real[int, int] locs(Nlocs[n],2); 
+real[int,int] observations(Nlocs[n], Nt);
+
+
+string resdir = datadir + Nlocs[n] + "/"; 
+exec("mkdir -p " + resdir);
+
+for( int sim=0; sim<nsim; sim++){
+ 
+	Vh f, g, v; // one test function vh is enough for both FEMs
+	Vh gNt = 0, f0 = ((x)^2+(y)^2)<=1;
+
+	int Ndofs = Vh.ndof;
+ 
+	for( int i=0; i<Nlocs[n]; i++){
+		locs(i,0) = a + (b-a)*randreal3(); 
+		locs(i,1) = a + (b-a)*randreal3();
+	}
+	string  tmpdir = resdir + sim + "/";
+	exec("mkdir -p " + tmpdir);
+	
+	writeTable(locs, tmpdir + "locs.txt");
+	
+	// define forcing term according to the exact solution
+	for(int t = 0; t < Nt; t++){
+		Vh U;
+		U[] = exact(0:Ndofs, t);
+		for( int i=0; i<Nlocs[n]; i++){
+			real U1 = randreal3(); // Uniform random number in (0, 1)
+			real U2 = randreal3(); // Another uniform random number in (0, 1)
+
+			// Box-Muller transform
+			real Z1 = sqrt(-2 * log(U1)) * cos(2 * pi * U2);
+			observations(i,t) = U(locs(i,0), locs(i,1)) + 0.05*Z1;
+		}		
+	}
+	writeTable(observations, tmpdir + "obs.txt");	
+	}
+}
