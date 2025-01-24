@@ -8,8 +8,8 @@ struct fe_fisher_kpp {
 	private:
     
     void init(){
-    	//std::cout << " \t - - - init - - -" << std::endl;
-   		FeSpace Vh(domain_, P1<1>);
+    	
+    	FeSpace Vh(domain_, P1<1>);
    		TrialFunction uh(Vh); 
   		TestFunction  vh(Vh);
   		
@@ -18,30 +18,18 @@ struct fe_fisher_kpp {
    		
    		A_ = a.assemble();
    		A_.makeCompressed();
-   		//std::cout << " \t A: "<< A_.rows()<< " " << A_.cols() << std::endl;
    		
    		M_ = mass.assemble();
    		M_.makeCompressed();
-   		//std::cout << " \t A: "<< M_.rows()<< " " << M_.cols() << std::endl;
-   		
    		
    		Psi_ = internals::point_basis_eval(a.trial_space(), locations_);
    		Psi_.makeCompressed();
    		
-   		//std::cout << " \t Psi_: "<< Psi_.rows()<< " " << Psi_.cols() << std::endl;
-   		
    		PsiTPsi_ = Psi_.transpose() * Psi_;
   		PsiTPsi_.makeCompressed();
   		
-  		//std::cout << " \t PsiTPsi_: "<< PsiTPsi_.rows()<< " " << PsiTPsi_.cols() << std::endl;
-   		
-  		
   		n_dofs_ = Vh.n_dofs();
-  		/*
-  		std::cout << "n_dofs_ " << n_dofs_ << std::endl;
-  		std::cout << "n_locs_ " << n_locs_ << std::endl;
-  		std::cout << "n_time_locs_ " << n_time_locs_ << std::endl;
-  		*/
+  		
   		y_ = VectorType::Zero(n_dofs_*n_time_locs_);
     	u_ = y_;
     	p_ = y_;
@@ -50,9 +38,7 @@ struct fe_fisher_kpp {
    		I_.setIdentity();
    		
    		Mt_ = kronecker(I_, M_);
-   		Mt_.makeCompressed();
-   		//std::cout << " \t Mt_: "<< Mt_.rows()<< " " << Mt_.cols() << std::endl;
-   		//std::cout << " \t - - - end - - -" << std::endl;
+   		Mt_.makeCompressed();	
     }
     
     public:
@@ -89,7 +75,6 @@ struct fe_fisher_kpp {
     }
     
     VectorType state(const VectorType& u) const{
-    	std::cout << "\t solving state " << std::endl;
     	
     	FeSpace Vh(domain_, P1<1>);
    		TrialFunction uh(Vh); 
@@ -123,7 +108,6 @@ struct fe_fisher_kpp {
     }
     
     VectorType adjoint(const VectorType& y) const{
-    	std::cout << "\t solving adjoint " << std::endl;
     	
     	FeSpace Vh(domain_, P1<1>);
    		TrialFunction uh(Vh); 
@@ -135,7 +119,7 @@ struct fe_fisher_kpp {
     	VectorType p = VectorType::Zero(n_dofs_ * n_time_locs_); // p(T) == 0
     	
     	for(int t = n_time_locs_ - 1; t > 0; t--){
-    		y_old = get_t(y,t);
+    		y_old = get_t(y,t-1);
     		auto R_ = reac.assemble();
     		R_.makeCompressed();
    		
@@ -146,12 +130,12 @@ struct fe_fisher_kpp {
    			SparseSolverType lin_solver(S);
     		lin_solver.factorize(S);
     		
-    		VectorType b = 1./dT_*M_*get_t(p,t); - 1./(n_time_locs_*n_locs_)*PsiTPsi_* get_t(y,t-1); + 
-    												   1./(n_time_locs_*n_locs_)*Psi_.transpose()*obs(t-1);
+    		VectorType b = 1./dT_*M_*get_t(p,t) - 1./(n_time_locs_*n_locs_)*PsiTPsi_* get_t(y,t-1) + 
+    											  1./(n_time_locs_*n_locs_)*Psi_.transpose()*obs(t-1);
     		
     		p.block( (t-1)*n_dofs_, 0, n_dofs_, 1) = lin_solver.solve(b); 
     	}
-    	
+    
     	return p;
     }
     
@@ -199,6 +183,21 @@ struct fe_fisher_kpp {
     	u_init_ = u0;
     }
    
+   	// optimization algorithm custom stopping criterion
+    template <typename OptimizerType> bool opt_stopping_criterion(OptimizerType& opt) {
+    	
+    	bool stop;
+    	
+    	VectorType y_old = state(opt.x_old);
+    	double loss_old = J(opt.x_old, y_old);
+    	
+    	VectorType y_new = state(opt.x_new);
+    	double loss_new = J(opt.x_new, y_new);
+		
+		stop = std::abs((loss_new - loss_old) / loss_old) < tol_;
+		return stop;
+    }
+   
     // attribute 
     const Triangulation<2,2>& domain_;
     
@@ -220,48 +219,49 @@ struct fe_fisher_kpp {
     const VectorType& observations_;
     
     double lambda_ = 1.;
-    //VectorType x_; // x_ = [y, u, p]
-    
+   
     VectorType y_;
     VectorType u_;
     VectorType p_;
     
 	VectorType y0_;
 	VectorType u_init_;
-	
-	BFGS<Eigen::Dynamic, BacktrackingLineSearch> opt_;
+	double tol_ = 1e-6;
+	BFGS<Eigen::Dynamic, WolfeLineSearch> opt_ = BFGS<Eigen::Dynamic, WolfeLineSearch>(30, tol_, 0.01);
 };
 
 int main(){
-	
+   std::string datadir = "data/";
+   std::string meshdir = datadir + "mesh/";
    constexpr int local_dim = 2;
    using PointT = Eigen::Matrix<double, local_dim, 1>;
-
-   // mesh andrebbe letta da freefem
-   Triangulation<local_dim, local_dim> unit_square = Triangulation<2, 2>::UnitSquare(17, cache_cells); // forse 17 * 17
    
-   std::string datadir = "data/";
-   // define bilinear forms
+   Eigen::MatrixXd nodes = read_mtx<double>(meshdir +"nodes.mtx");
+   Eigen::MatrixXi elements = read_mtx<int>(meshdir +"elements.mtx");
+   Eigen::MatrixXi boundary = read_mtx<int>(meshdir +"boundary.mtx");
+   Triangulation<local_dim, local_dim> unit_square = Triangulation<2, 2>(nodes, elements, boundary);
+   
+   
+   std::cout << nodes.rows() << " " << nodes.cols() << std::endl;
+   
    double mu = 0.1;
    double alpha = 3.0;
-   int Nt = read_txt<int>(datadir + "Nt.txt")(0,0);
-   int Nlocs = read_txt<int>(datadir + "Nlocs.txt")(1,0);
-   double Tf = 1.;
-   double dt = Tf/(Nt - 1);
    
-   Eigen::MatrixXd locations = read_txt<double>(datadir + std::to_string(Nlocs) + "/0/" + "locs.txt"); 
-   Eigen::MatrixXd obsMat = read_txt<double>(datadir + std::to_string(Nlocs) + "/0/" + "obs.txt");
+   int n_observations = read_txt<int>(datadir + "n_locations.txt")(1,0);
+   int nsim = 30;
+   int sim = 0;
+   
+   Eigen::MatrixXd locations = read_txt<double>(datadir + std::to_string(n_observations) + "/" + std::to_string(sim)  + "/" + "locs.txt"); 
+   Eigen::MatrixXd obsMat = read_txt<double>(datadir + std::to_string(n_observations) + "/" + std::to_string(sim) + "/" + "obs.txt");
    std::cout << locations.rows() << " " << locations.cols() << std::endl;
    
    Eigen::VectorXd observations = Eigen::Map<Eigen::VectorXd>(obsMat.data(), obsMat.size());
    std::cout << observations.rows() << " " << observations.cols() << std::endl;
    
-   Eigen::VectorXd time_locations = Eigen::VectorXd::Zero(Nt);
-   for(int i=0; i<Nt; i++) time_locations(i,0) = dt*i;
+   Eigen::VectorXd time_locations = read_txt<double>(datadir + "time_locations.txt");
+   
    std::cout << time_locations.rows() << " " << time_locations.cols() << std::endl;
    
-   // const Triangulation<2,2>& domain, double mu, double alpha,
-   // const MatrixType& locations, const VectorType& time_locations, const MatrixType& observations)	
    auto model = fe_fisher_kpp(unit_square, mu, alpha, locations, time_locations, observations);
    
    
@@ -269,16 +269,19 @@ int main(){
    std::cout << IC.rows() << " " << IC.cols() << std::endl;
    
    model.set_state_initial_condition(IC);
-   model.set_control_initial_guess(Eigen::VectorXd::Zero(Nt*17*17));
    
-   //*/
+   Eigen::VectorXd u0 = read_txt<double>(datadir + "u_guess_rand.txt");
+   model.set_control_initial_guess(u0);
+   
    model.solve();
    
    std::cout << model.y().rows() <<  " " << model.y().cols() << std::endl; 
+   std::cout <<"n iterations: " <<  model.opt_.n_iter() << std::endl;
+   
    std::cout <<"state: " << model.y().minCoeff() <<  " " << model.y().maxCoeff() << std::endl; 
    std::cout <<"control: " << model.u().minCoeff() <<  " " << model.u().maxCoeff() << std::endl; 
    std::cout <<"adjoint: " << model.p().minCoeff() <<  " " << model.p().maxCoeff() << std::endl; 
-   
+   Eigen::saveMarket(model.y(), datadir + std::to_string(n_observations) +"/" + "y.mtx");   
    return 0;
 }
 

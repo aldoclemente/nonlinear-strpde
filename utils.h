@@ -12,7 +12,7 @@
 #include <Eigen/Dense>
 #include <unsupported/Eigen/SparseExtra>
 
-template <typename T> Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic> 
+template <typename T> Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> 
 read_mtx(const std::string& file_name) {
     Eigen::SparseMatrix<T> buff;
     Eigen::loadMarket(buff, file_name);

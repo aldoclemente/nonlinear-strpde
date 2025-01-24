@@ -15,11 +15,13 @@ int n = 16;
 
 string datadir = "data/";
 exec("mkdir -p " + datadir);
+exec("mkdir -p " + datadir + "mesh/");
 
 mesh Th=square(n,n, [a + (b-a)*x, a + (b-a)*y]);
-string dataname = datadir + "square.mesh";
-savemesh(Th, dataname);
+string meshname = datadir + "mesh/square.mesh";
+savemesh(Th, meshname);
 
+exec("Rscript write.mesh.R");
 //plot(Th, wait = true);
 
 fespace Vh(Th, P1); 
@@ -36,7 +38,7 @@ real Tf = 1.0, dt = 0.1;
 int Nt = Tf / dt + 1;
 
 {
-	ofstream file(datadir + "Nt.txt");	
+	ofstream file(datadir + "n_time_locations.txt");	
 	file << Nt << endl;
 }
 //int Nt = 21;
@@ -49,13 +51,14 @@ problem KFisher(uh,vh) = int2d(Th)(uh*vh/dt + Grad(uh)'*Grad(vh)*mu) - int2d(Th)
 
 real[int,int] exact(Ndofs, Nt);
 exact = 0.;
+exec("mkdir -p " + datadir + "exact/");
 
 for (int t=0;t<Nt;t++)  
 { 
   exact(0:Ndofs-1,t) = uh0[];
   KFisher;
   
-  ofstream file(datadir + "fisher_" + t + ".txt");
+  ofstream file(datadir + "exact/fisher_" + t + ".txt");
   for( int i =0; i < Vh.ndof; i++){
 	file << uh0[][i] << endl;
   }
@@ -69,21 +72,29 @@ for (int t=0;t<Nt;t++)
 writeTable(exact, datadir + "exact.txt");
 
 // --- 
-real[int] Nlocs = [100, 250, 500, 1000];
+real[int,int] Nlocs(4,1);
+Nlocs(:,0) = [100, 250, 500, 1000];
 int nsim = 30;
 
+writeTable(Nlocs, datadir + "n_locations.txt");
+
+real[int, int] TimeLocations(Nt,1);
+for(int t = 0; t<Nt; t++) TimeLocations(t,0) = dt * t;
+writeTable(TimeLocations, datadir + "time_locations.txt");
+
+/*
 {
-	ofstream file(datadir + "Nlocs.txt");
+	ofstream file(datadir + "n_locations.txt");
 	file << Nlocs << endl;
-}
+}*/
 
 for( int n=0; n<Nlocs.n; n++){
 
-real[int, int] locs(Nlocs[n],2); 
-real[int,int] observations(Nlocs[n], Nt);
+real[int, int] locs(Nlocs(n,0),2); 
+real[int,int] observations(Nlocs(n,0), Nt);
 
 
-string resdir = datadir + Nlocs[n] + "/"; 
+string resdir = datadir + Nlocs(n,0) + "/"; 
 exec("mkdir -p " + resdir);
 
 for( int sim=0; sim<nsim; sim++){
@@ -93,7 +104,7 @@ for( int sim=0; sim<nsim; sim++){
 
 	int Ndofs = Vh.ndof;
  
-	for( int i=0; i<Nlocs[n]; i++){
+	for( int i=0; i<Nlocs(n,0); i++){
 		locs(i,0) = a + (b-a)*randreal3(); 
 		locs(i,1) = a + (b-a)*randreal3();
 	}
@@ -106,7 +117,7 @@ for( int sim=0; sim<nsim; sim++){
 	for(int t = 0; t < Nt; t++){
 		Vh U;
 		U[] = exact(0:Ndofs, t);
-		for( int i=0; i<Nlocs[n]; i++){
+		for( int i=0; i<Nlocs(n,0); i++){
 			real U1 = randreal3(); // Uniform random number in (0, 1)
 			real U2 = randreal3(); // Another uniform random number in (0, 1)
 
@@ -118,3 +129,22 @@ for( int sim=0; sim<nsim; sim++){
 	writeTable(observations, tmpdir + "obs.txt");	
 	}
 }
+
+
+real[int,int] control(Ndofs, Nt);
+rand(control, 0, 0.25);
+control(:,Nt-1) = 0.;
+real[int] tmp = asvector(control);
+real[int, int] U0(Ndofs*Nt,1);
+U0(:,0) = tmp;
+
+writeTable(U0, datadir + "u_guess_rand.txt");
+
+for(int i = 0; i < Nt; i++){
+	control(:, i) = exp(- (dt*i)) * control(:,i);
+}
+control(:,Nt-1) = 0;
+tmp = asvector(control);
+U0(:,0) = tmp;
+writeTable(U0, datadir + "u_guess_rand_smooth.txt");
+
