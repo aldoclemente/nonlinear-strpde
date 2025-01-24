@@ -1,1 +1,5 @@
-data/
+*
+!*.cpp
+!*.h
+
+prova.cpp
