@@ -20,7 +20,7 @@ read_mtx(const std::string& file_name) {
 }
 
 template <typename T> Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic> 
-read_txt(const std::string& filename) {
+read_TXT(const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
         throw std::runtime_error("Could not open file: " + filename);

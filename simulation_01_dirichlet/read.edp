@@ -1,0 +1,14 @@
+string filename = "data/alpha_0.05.txt";
+
+// Read file.
+    ifstream file(filename);
+    int nsim = 30;
+    real[int] alpha(30);   
+    string line;
+    // Read by line.
+    for (int k = 0; k < nsim; k++){
+        getline(file, line);
+        alpha(k) = atof(line);
+    }
+
+cout << alpha << endl;

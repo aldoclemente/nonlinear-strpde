@@ -1,0 +1,150 @@
+load "ffrandom"
+load "lapack"
+//load "fflapack"
+
+srandomdev();
+
+include "../utils.idp"
+real quadratureOrder = 7;
+real lambda = 1e-3; // 100. 
+
+real a = -2.5;
+real b = 2.5;
+
+int n = 16;
+
+string datadir = "data/";
+exec("mkdir -p " + datadir);
+exec("mkdir -p " + datadir + "mesh/");
+
+mesh Th=square(n,n, [a + (b-a)*x, a + (b-a)*y]);
+string meshname = datadir + "mesh/square.mesh";
+savemesh(Th, meshname);
+
+exec("Rscript write.mesh.R");
+//plot(Th, wait = true);
+
+fespace Vh(Th, P1); 
+Vh uh, vh, uh0 = ((x)^2+(y)^2)<=1;
+
+int Ndofs = Vh.ndof;
+
+
+cout.precision(2);
+
+real mu = 0.1, k = 3.0; //3.0;
+
+real Tf = 1.0, dt = 0.1;
+int Nt = Tf / dt + 1;
+
+{
+	ofstream file(datadir + "n_time_locations.txt");	
+	file << Nt << endl;
+}
+//int Nt = 21;
+
+cout << dt << " " << Nt << endl; 
+macro Grad(u)[dx(u),dy(u)]//
+
+// estimate solution
+problem KFisher(uh,vh) = int2d(Th)(uh*vh/dt + Grad(uh)'*Grad(vh)*mu) - int2d(Th)(uh0*vh/dt) + int2d(Th)(k*uh0*uh*vh) - int2d(Th)(k*vh*uh);
+
+real[int,int] exact(Ndofs, Nt);
+exact = 0.;
+exec("mkdir -p " + datadir + "exact/");
+
+for (int t=0;t<Nt;t++)  
+{ 
+  exact(0:Ndofs-1,t) = uh0[];
+  KFisher;
+  
+  ofstream file(datadir + "exact/fisher_" + t + ".txt");
+  for( int i =0; i < Vh.ndof; i++){
+	file << uh0[][i] << endl;
+  }
+
+  
+  uh0 = uh;
+  
+  plot(uh0, cmm="t="+t+"[sec]", dim=2, fill=true, value=true, wait=0); 
+}
+
+writeTable(exact, datadir + "exact.txt");
+
+// --- 
+real[int,int] Nlocs(4,1);
+Nlocs(:,0) = [100, 250, 500, 1000];
+int nsim = 30;
+
+writeTable(Nlocs, datadir + "n_locations.txt");
+
+real[int, int] TimeLocations(Nt,1);
+for(int t = 0; t<Nt; t++) TimeLocations(t,0) = dt * t;
+writeTable(TimeLocations, datadir + "time_locations.txt");
+
+/*
+{
+	ofstream file(datadir + "n_locations.txt");
+	file << Nlocs << endl;
+}*/
+
+for( int n=0; n<Nlocs.n; n++){
+
+real[int, int] locs(Nlocs(n,0),2); 
+real[int,int] observations(Nlocs(n,0), Nt);
+
+
+string resdir = datadir + Nlocs(n,0) + "/"; 
+exec("mkdir -p " + resdir);
+
+for( int sim=0; sim<nsim; sim++){
+ 
+	Vh f, g, v; // one test function vh is enough for both FEMs
+	Vh gNt = 0, f0 = ((x)^2+(y)^2)<=1;
+
+	int Ndofs = Vh.ndof;
+ 
+	for( int i=0; i<Nlocs(n,0); i++){
+		locs(i,0) = a + (b-a)*randreal3(); 
+		locs(i,1) = a + (b-a)*randreal3();
+	}
+	string  tmpdir = resdir + sim + "/";
+	exec("mkdir -p " + tmpdir);
+	
+	writeTable(locs, tmpdir + "locs.txt");
+	
+	// define forcing term according to the exact solution
+	for(int t = 0; t < Nt; t++){
+		Vh U;
+		U[] = exact(0:Ndofs, t);
+		for( int i=0; i<Nlocs(n,0); i++){
+			real U1 = randreal3(); // Uniform random number in (0, 1)
+			real U2 = randreal3(); // Another uniform random number in (0, 1)
+
+			// Box-Muller transform
+			real Z1 = sqrt(-2 * log(U1)) * cos(2 * pi * U2);
+			observations(i,t) = U(locs(i,0), locs(i,1)) + 0.05*Z1;
+		}		
+	}
+	writeTable(observations, tmpdir + "obs.txt");	
+	}
+}
+
+
+real[int,int] control(Ndofs, Nt);
+rand(control, 0, 0.25);
+control(:,Nt-1) = 0.;
+real[int] tmp = asvector(control);
+real[int, int] U0(Ndofs*Nt,1);
+U0(:,0) = tmp;
+
+writeTable(U0, datadir + "u_guess_rand.txt");
+
+for(int i = 0; i < Nt; i++){
+	control(:, i) = exp(- (dt*i)) * control(:,i);
+}
+control(:,Nt-1) = 0;
+tmp = asvector(control);
+U0(:,0) = tmp;
+writeTable(U0, datadir + "u_guess_rand_smooth.txt");
+

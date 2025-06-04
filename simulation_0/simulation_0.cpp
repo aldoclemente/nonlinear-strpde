@@ -6,7 +6,7 @@ using namespace fdapde;
 struct fe_fisher_kpp {
 
 private:
-  void init_areal() {
+  void init() {
 
     FeSpace Vh(domain_, P1<1>);
     TrialFunction uh(Vh);
@@ -22,17 +22,11 @@ private:
     M_ = mass.assemble();
     M_.makeCompressed();
 
-    const auto &[psi, measure_vec] =
-        internals::areal_basis_eval(Vh, incidence_matrix_);
+    Psi_ = internals::point_basis_eval(a.trial_space(), locations_);
+    Psi_.makeCompressed();
 
-    Psi_ = psi;
-    D_ = measure_vec.asDiagonal();
-
-    std::cout << psi.rows() << " " << psi.cols() << std::endl;
-    std::cout << D_.rows() << " " << D_.cols() << std::endl;
-
-    PsiTPsi_ = Psi_.transpose() * D_ * Psi_;
-    // PsiTPsi_.makeCompressed(); // obv non ha senso, PsiTPsi è Densa
+    PsiTPsi_ = Psi_.transpose() * Psi_;
+    PsiTPsi_.makeCompressed();
 
     n_dofs_ = Vh.n_dofs();
 
@@ -54,24 +48,21 @@ public:
   using DiagonalMatrixType = Eigen::DiagonalMatrix<double, Dynamic, Dynamic>;
   using SparseSolverType = Eigen::SparseLU<SparseMatrixType>;
   using DenseSolverType = Eigen::PartialPivLU<MatrixType>;
-  using PointT = Eigen::Matrix<double, 2, 1>;
 
   fe_fisher_kpp(const Triangulation<2, 2> &domain, double mu, double alpha,
-                const BinaryMatrix<Dynamic> &incidence_matrix,
-                const VectorType &time_locations,
+                const MatrixType &locations, const VectorType &time_locations,
                 const VectorType &observations)
-      : domain_(domain), mu_(mu), alpha_(alpha),
-        incidence_matrix_(incidence_matrix), time_locations_(time_locations),
+      : domain_(domain), mu_(mu), alpha_(alpha), locations_(locations),
+        time_locations_(time_locations),
         dT_(time_locations[1] - time_locations[0]), observations_(observations),
-        n_locs_(incidence_matrix.rows()), n_time_locs_(time_locations.size()) {
-    init_areal();
+        n_locs_(locations.rows()), n_time_locs_(time_locations.size()) {
+    init();
   }
 
-  void solve() {
+  void solve(double lambda) {
+    lambda_ = lambda;
     u_ = opt_.optimize(*this, u_init_);
-    std::cout << "opt_.value: " << opt_.value() << std::endl;
     y_ = state(u_);
-    std::cout << "J(y_,u_): " << J(y_, u_) << std::endl;
     p_ = adjoint(y_);
   }
 
@@ -85,12 +76,8 @@ public:
   }
 
   VectorType state(const VectorType &u) const {
-    FeSpace Vh(domain_, P1<1>);
-    auto &dof_handler = Vh.dof_handler();
-    // dof_handler.set_dirichlet_constraint(/* on = */ 1, /* data = */ g_0);
-    // dof_handler.set_dirichlet_constraint(/* on = */ 3, /* data = */ g_0);
-    dof_handler.set_dirichlet_constraint(/* on = */ 4, /* data = */ g_1);
 
+    FeSpace Vh(domain_, P1<1>);
     TrialFunction uh(Vh);
     TestFunction vh(Vh);
     FeFunction y_old(Vh);
@@ -106,16 +93,14 @@ public:
       R_.makeCompressed();
 
       SparseMatrixType S = 1. / dT_ * M_ + A_ + R_;
-      dof_handler.enforce_constraints(S);
-      // S.prune(1e-10);
+      S.prune(1e-10);
       S.makeCompressed();
 
       SparseSolverType lin_solver(S);
       lin_solver.factorize(S);
 
       VectorType b = 1. / dT_ * M_ * y_old.coeff() + M_ * get_t(u, t + 1);
-      // dof_handler.enforce_constraints(S,b);
-      dof_handler.enforce_constraints(b);
+
       y.block((t + 1) * n_dofs_, 0, n_dofs_, 1) = lin_solver.solve(b);
     }
 
@@ -123,12 +108,8 @@ public:
   }
 
   VectorType adjoint(const VectorType &y) const {
-    FeSpace Vh(domain_, P1<1>);
-    auto &dof_handler = Vh.dof_handler();
-    // dof_handler.set_dirichlet_constraint(/* on = */ 1, /* data = */ g_0);
-    // dof_handler.set_dirichlet_constraint(/* on = */ 3, /* data = */ g_0);
-    dof_handler.set_dirichlet_constraint(/* on = */ 4, /* data = */ g_0);
 
+    FeSpace Vh(domain_, P1<1>);
     TrialFunction uh(Vh);
     TestFunction vh(Vh);
     FeFunction y_old(Vh);
@@ -143,8 +124,7 @@ public:
       R_.makeCompressed();
 
       SparseMatrixType S = 1. / dT_ * M_ + A_ + 2. * R_;
-      dof_handler.enforce_constraints(S);
-      // S.prune(1e-10);
+      S.prune(1e-10);
       S.makeCompressed();
 
       SparseSolverType lin_solver(S);
@@ -153,10 +133,8 @@ public:
       VectorType b =
           1. / dT_ * M_ * get_t(p, t) -
           1. / (n_time_locs_ * n_locs_) * PsiTPsi_ * get_t(y, t - 1) +
-          1. / (n_time_locs_ * n_locs_) * Psi_.transpose() * D_ *
-              obs(t - 1); // !!!!
-      // dof_handler.enforce_constraints(S,b);
-      dof_handler.enforce_constraints(b);
+          1. / (n_time_locs_ * n_locs_) * Psi_.transpose() * obs(t - 1);
+
       p.block((t - 1) * n_dofs_, 0, n_dofs_, 1) = lin_solver.solve(b);
     }
 
@@ -174,8 +152,7 @@ public:
     return [this](const VectorType &u) {
       auto y = state(u);
       auto p = adjoint(y);
-      auto grad_u =
-          alpha_ * Mt_ * u - Mt_ * p; // ma può essere veramente sta roba
+      auto grad_u = lambda_ * Mt_ * u - Mt_ * p; // qua ci va lambda e non alpha
       return grad_u;
     };
   }
@@ -203,7 +180,7 @@ public:
   void set_control_initial_guess(const VectorType &u0) { u_init_ = u0; }
 
   // optimization algorithm custom stopping criterion
-  template <typename OptimizerType> bool stop(OptimizerType &opt) {
+  template <typename OptimizerType> bool stop_if(OptimizerType &opt) {
 
     bool stop;
 
@@ -220,21 +197,13 @@ public:
   // attribute
   const Triangulation<2, 2> &domain_;
 
-  ScalarField<2, decltype([](const PointT &p) { return 0; })> g_0;
-  ScalarField<2, decltype([](const PointT &p) { return 1.; })> g_1;
-
   double mu_, alpha_;
   SparseMatrixType A_; // [A]_{ij} = \int_D mu * grad(Psi_j)*grad(Psi_i) - alpha
                        // * Psi_j * Psi_i
   SparseMatrixType M_; // Mass
 
   SparseMatrixType Psi_;
-  // NB Nella versione con le locs questa è sparsa,
-  //    adesso deve essere densa
-  // SparseMatrixType PsiTPsi_;
-  MatrixType D_;
-  MatrixType PsiTPsi_; // ==  Psi^T D Psi, vedi init_areal()
-
+  SparseMatrixType PsiTPsi_;
   SparseMatrixType Mt_; // Spatio-Temporal Mass matrix
 
   int n_dofs_ = 0;
@@ -242,9 +211,7 @@ public:
   int n_time_locs_ = 0;
   double dT_ = 0.;
 
-  // nb se metti le const ref devi inizializzare tutto eh..
-  //    per ora fregatene, questa è la Fisher-KPP areale.
-  const BinaryMatrix<Dynamic> &incidence_matrix_;
+  const MatrixType &locations_;
   const VectorType &time_locations_;
   const VectorType &observations_;
 
@@ -257,102 +224,67 @@ public:
   VectorType y0_;
   VectorType u_init_;
   double tol_ = 1e-5;
-  // BFGS<Eigen::Dynamic, BacktrackingLineSearch> opt_ =
-  //     BFGS<Eigen::Dynamic, BacktrackingLineSearch>(100, tol_, 0.01);
+  // BFGS<Eigen::Dynamic, BacktrackingLineSearch> opt_ = BFGS<Eigen::Dynamic,
+  // BacktrackingLineSearch>(50, tol_, 0.01);
   GradientDescent<Eigen::Dynamic, BacktrackingLineSearch> opt_ =
-      GradientDescent<Eigen::Dynamic, BacktrackingLineSearch>(500, tol_, 0.01);
+      GradientDescent<Eigen::Dynamic, BacktrackingLineSearch>(1000, tol_, 0.01);
 };
 
 int main(int argc, char *argv[]) {
   std::string datadir = "data/";
-  std::string meshdir = "../simulation_1/" + datadir + "mesh/";
+  std::string meshdir = datadir + "mesh/";
   constexpr int local_dim = 2;
   using PointT = Eigen::Matrix<double, local_dim, 1>;
-  std::cout << "ciao :) " << std::endl;
+
   Eigen::MatrixXd nodes = read_mtx<double>(meshdir + "nodes.mtx");
   Eigen::MatrixXi elements = read_mtx<int>(meshdir + "elements.mtx");
   Eigen::MatrixXi boundary = read_mtx<int>(meshdir + "boundary.mtx");
-
   Triangulation<local_dim, local_dim> unit_square =
       Triangulation<2, 2>(nodes, elements, boundary);
 
-  unit_square.mark_boundary(
-      /* as = */ 1,
-      /* where = */ [](const typename Triangulation<2, 2>::EdgeType &edge) {
-        return (edge.node(0)[1] == 0.0 &&
-                edge.node(1)[1] == 0.0); // bottom side ( y = 0 )
-      });
-  unit_square.mark_boundary(
-      /* as = */ 2,
-      /* where = */ [](const typename Triangulation<2, 2>::EdgeType &edge) {
-        return (edge.node(0)[0] == 1.0 &&
-                edge.node(1)[0] == 1.0); // right side ( x = 1 )
-      });
-  unit_square.mark_boundary(
-      /* as = */ 3,
-      /* where = */ [](const typename Triangulation<2, 2>::EdgeType &edge) {
-        return (edge.node(0)[1] == 1.0 &&
-                edge.node(1)[1] == 1.0); // upper side ( y = 1)
-      });
-  unit_square.mark_boundary(
-      /* as = */ 4,
-      /* where = */ [](const typename Triangulation<2, 2>::EdgeType &edge) {
-        return (edge.node(0)[0] == 0.0 &&
-                edge.node(1)[0] == 0.0); // left side ( x = 0 )
-      });
+  std::cout << nodes.rows() << " " << nodes.cols() << std::endl;
 
   double mu = 0.1;
-  double alpha = 1.0;
+  double alpha = 3.0;
 
-  Eigen::MatrixXi incidence_matrix =
-      read_TXT<int>(datadir + "incidence_matrix.txt");
-  Eigen::MatrixXd area = read_TXT<double>(datadir + "area.txt");
-
-  BinaryMatrix<Dynamic> bm(incidence_matrix);
-
-  FeSpace Vh(unit_square, P1<1>);
-  const auto &[psi, measure_vec] = internals::areal_basis_eval(Vh, bm);
-
-  std::cout << "Psi: " << psi.rows() << " " << psi.cols() << std::endl;
-  std::cout << "area: \n" << measure_vec << std::endl;
-
+  int n_observations = read_TXT<int>(datadir + "n_locations.txt")(
+      std::stoi(argv[1]), 0); // 0, 1, 2, 3
   int nsim = 30;
-  int sim = std::stoi(argv[1]); // 0, ..., 29
-
-  std::cout << ":)" << std::endl;
-
+  int sim = std::stoi(argv[2]); // 0, ..., 29
+  double lambda = 1.;
+  if (argc > 3) {
+    lambda = std::stod(argv[3]);
+  }
+  Eigen::MatrixXd locations =
+      read_TXT<double>(datadir + std::to_string(n_observations) + "/" +
+                       std::to_string(sim) + "/" + "locs.txt");
   Eigen::MatrixXd obsMat =
-      read_TXT<double>(datadir + std::to_string(sim) + "/" + "obs.txt");
-
-  std::cout << ":)" << std::endl;
+      read_TXT<double>(datadir + std::to_string(n_observations) + "/" +
+                       std::to_string(sim) + "/" + "obs.txt");
+  std::cout << locations.rows() << " " << locations.cols() << std::endl;
 
   Eigen::VectorXd observations =
       Eigen::Map<Eigen::VectorXd>(obsMat.data(), obsMat.size());
-  std::cout << "obs " << observations.rows() << " " << observations.cols()
-            << std::endl;
+  std::cout << observations.rows() << " " << observations.cols() << std::endl;
 
   Eigen::VectorXd time_locations =
-      read_TXT<double>("../simulation_1/" + datadir + "time_locations.txt");
+      read_TXT<double>(datadir + "time_locations.txt");
 
   std::cout << time_locations.rows() << " " << time_locations.cols()
             << std::endl;
 
-  auto model =
-      fe_fisher_kpp(unit_square, mu, alpha, bm, time_locations, observations);
+  auto model = fe_fisher_kpp(unit_square, mu, alpha, locations, time_locations,
+                             observations);
 
-  Eigen::VectorXd IC =
-      read_TXT<double>("../simulation_1/" + datadir + "exact.txt").col(0);
-  std::cout << IC.rows() << " " << IC.cols() << std::endl;
-
-  std::cout << IC.minCoeff() << " " << IC.maxCoeff() << std::endl;
+  Eigen::VectorXd IC = read_TXT<double>(datadir + "exact.txt").col(0);
+  // std::cout << IC.rows() << " " << IC.cols() << std::endl;
 
   model.set_state_initial_condition(IC);
 
-  Eigen::VectorXd u0 =
-      read_TXT<double>("../simulation_1/" + datadir + "u_guess_rand.txt");
+  Eigen::VectorXd u0 = read_TXT<double>(datadir + "u_guess_rand.txt");
   model.set_control_initial_guess(u0);
 
-  model.solve();
+  model.solve(lambda);
 
   std::cout << model.y().rows() << " " << model.y().cols() << std::endl;
   std::cout << "n iterations: " << model.opt_.n_iter() << std::endl;
@@ -363,10 +295,42 @@ int main(int argc, char *argv[]) {
             << model.u().maxCoeff() << std::endl;
   std::cout << "adjoint: " << model.p().minCoeff() << " "
             << model.p().maxCoeff() << std::endl;
-
   vector2txt(std::vector<int>{model.opt_.n_iter()},
-             datadir + std::to_string(sim) + "/" + "n_iter.txt");
-  Eigen::saveMarket(model.y(), datadir + std::to_string(sim) + "/" + "y.mtx");
+             datadir + std::to_string(n_observations) + "/" +
+                 std::to_string(sim) + "/" + "n_iter.txt");
+  Eigen::saveMarket(model.y(), datadir + std::to_string(n_observations) + "/" +
+                                   std::to_string(sim) + "/" + "y.mtx");
+
+  // STRPDE - PARABOLIC
+  /*
+  Eigen::VectorXd par_time_locs =
+      time_locations.tail(time_locations.size() - 1);
+  Eigen::VectorXd par_obs =
+      observations.tail(par_time_locs.size() * locations.rows());
+
+  std::cout << par_time_locs << std::endl;
+  Triangulation<1, 1> T(par_time_locs);
+  GeoFrame data(unit_square, T);
+  auto &l = data.insert_scalar_layer<POINT, POINT>(
+      "layer", std::pair{locations, MESH_NODES});
+  l.load_vec("y", par_obs);
+  std::cout << l << std::endl;
+
+  FeSpace Vh(unit_square, P1<1>);
+  TrialFunction u(Vh);
+  TestFunction v(Vh);
+  ZeroField<2> f;
+  auto a = integral(unit_square)(mu * dot(grad(u), grad(v)) - alpha * u * v);
+  auto F = integral(unit_square)(f * v);
+  SRPDE srpde("y ~ f", data, fe_ls_parabolic_mono(std::pair{a, F}, IC));
+
+  srpde.fit(lambda, lambda);
+  Eigen::saveMarket(srpde.f(), datadir + std::to_string(n_observations) + "/" +
+                                   std::to_string(sim) + "/" +
+                                   "y_parabolic.mtx");
+  Eigen::saveMarket(srpde.misfit(), datadir + std::to_string(n_observations) +
+                                        "/" + std::to_string(sim) + "/" +
+                                        "mis_parabolic.mtx");
 
   return 0;
 }

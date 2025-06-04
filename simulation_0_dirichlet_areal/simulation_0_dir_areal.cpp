@@ -89,7 +89,7 @@ public:
     auto &dof_handler = Vh.dof_handler();
     // dof_handler.set_dirichlet_constraint(/* on = */ 1, /* data = */ g_0);
     // dof_handler.set_dirichlet_constraint(/* on = */ 3, /* data = */ g_0);
-    dof_handler.set_dirichlet_constraint(/* on = */ 4, /* data = */ g_1);
+    dof_handler.set_dirichlet_constraint(/* on = */ 4, /* data = */ g_0);
 
     TrialFunction uh(Vh);
     TestFunction vh(Vh);
@@ -175,7 +175,7 @@ public:
       auto y = state(u);
       auto p = adjoint(y);
       auto grad_u =
-          alpha_ * Mt_ * u - Mt_ * p; // ma può essere veramente sta roba
+          lambda_ * Mt_ * u - Mt_ * p; // ma può essere veramente sta roba
       return grad_u;
     };
   }
@@ -265,7 +265,7 @@ public:
 
 int main(int argc, char *argv[]) {
   std::string datadir = "data/";
-  std::string meshdir = "../simulation_1/" + datadir + "mesh/";
+  std::string meshdir = "../simulation_0_dirichlet/" + datadir + "mesh/";
   constexpr int local_dim = 2;
   using PointT = Eigen::Matrix<double, local_dim, 1>;
   std::cout << "ciao :) " << std::endl;
@@ -277,32 +277,14 @@ int main(int argc, char *argv[]) {
       Triangulation<2, 2>(nodes, elements, boundary);
 
   unit_square.mark_boundary(
-      /* as = */ 1,
-      /* where = */ [](const typename Triangulation<2, 2>::EdgeType &edge) {
-        return (edge.node(0)[1] == 0.0 &&
-                edge.node(1)[1] == 0.0); // bottom side ( y = 0 )
-      });
-  unit_square.mark_boundary(
-      /* as = */ 2,
-      /* where = */ [](const typename Triangulation<2, 2>::EdgeType &edge) {
-        return (edge.node(0)[0] == 1.0 &&
-                edge.node(1)[0] == 1.0); // right side ( x = 1 )
-      });
-  unit_square.mark_boundary(
-      /* as = */ 3,
-      /* where = */ [](const typename Triangulation<2, 2>::EdgeType &edge) {
-        return (edge.node(0)[1] == 1.0 &&
-                edge.node(1)[1] == 1.0); // upper side ( y = 1)
-      });
-  unit_square.mark_boundary(
       /* as = */ 4,
       /* where = */ [](const typename Triangulation<2, 2>::EdgeType &edge) {
-        return (edge.node(0)[0] == 0.0 &&
-                edge.node(1)[0] == 0.0); // left side ( x = 0 )
+        return (edge.node(0)[0] == -2.5 &&
+                edge.node(1)[0] == -2.5); // left side ( x = 0 )
       });
 
   double mu = 0.1;
-  double alpha = 1.0;
+  double alpha = 3.0;
 
   Eigen::MatrixXi incidence_matrix =
       read_TXT<int>(datadir + "incidence_matrix.txt");
@@ -331,8 +313,8 @@ int main(int argc, char *argv[]) {
   std::cout << "obs " << observations.rows() << " " << observations.cols()
             << std::endl;
 
-  Eigen::VectorXd time_locations =
-      read_TXT<double>("../simulation_1/" + datadir + "time_locations.txt");
+  Eigen::VectorXd time_locations = read_TXT<double>(
+      "../simulation_0_dirichlet/" + datadir + "time_locations.txt");
 
   std::cout << time_locations.rows() << " " << time_locations.cols()
             << std::endl;
@@ -341,15 +323,16 @@ int main(int argc, char *argv[]) {
       fe_fisher_kpp(unit_square, mu, alpha, bm, time_locations, observations);
 
   Eigen::VectorXd IC =
-      read_TXT<double>("../simulation_1/" + datadir + "exact.txt").col(0);
+      read_TXT<double>("../simulation_0_dirichlet/" + datadir + "exact.txt")
+          .col(0);
   std::cout << IC.rows() << " " << IC.cols() << std::endl;
 
   std::cout << IC.minCoeff() << " " << IC.maxCoeff() << std::endl;
 
   model.set_state_initial_condition(IC);
 
-  Eigen::VectorXd u0 =
-      read_TXT<double>("../simulation_1/" + datadir + "u_guess_rand.txt");
+  Eigen::VectorXd u0 = read_TXT<double>("../simulation_0_dirichlet/" + datadir +
+                                        "u_guess_rand.txt");
   model.set_control_initial_guess(u0);
 
   model.solve();
