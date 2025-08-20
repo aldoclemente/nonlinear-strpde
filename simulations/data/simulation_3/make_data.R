@@ -31,7 +31,7 @@ plot(mesh, pch=".")
 points(centers, pch=16, col="blue")
 incidence_matrix = matrix(0, nrow=nrow(centers), ncol=nrow(mesh$triangles))
 
-plot(mesh,pch=".", col="black")
+plot(mesh,pch=".")
 points(centers, col="blue", pch=16)
 for(r in 1:nrow(centers)){
   for(e in 1:nrow(mesh$triangles)){
@@ -67,7 +67,7 @@ for(r in 1:nrow(centers)){
   D[r,] = sum(I[unique( as.vector(mesh$triangles[which(incidence_matrix[r,] == 1),]))])
 }
 
-time_locs = as.matrix(readMM("../simulation_1/time_mesh.mtx"))
+time_locs = as.matrix(readMM("../simulation_2/time_mesh.mtx"))
 time_locs = as.matrix(time_locs[-1])
 nsim=30
 
@@ -81,7 +81,7 @@ for(k in 1:length(sds)){
     sim_dir = paste0(sigma_dir, i, "/")
     if(!dir.exists(sim_dir)) dir.create(sim_dir, recursive = T)
     
-    exact_dir = paste0("../simulation_1/", "sigma_", sds[k], "/", i, "/")
+    exact_dir = paste0("../simulation_2/", "sigma_", sds[k], "/", i, "/")
     exact  = as.matrix(readMM(paste0(exact_dir, "exact.mtx")))
   
     int_exact = matrix(0, nrow=nrow(centers), ncol=n_time_locs)
@@ -98,7 +98,4 @@ for(k in 1:length(sds)){
   }
 }
 
-writeMM(Matrix(incidence_matrix, sparse=T),file = "incidence_matrix.mtx")
-
-# write.table(D,file = "data/area.txt",
-#             row.names = F, col.names = F)
+write.csv(format(incidence_matrix, digits=16), file = "incidence_matrix.csv")

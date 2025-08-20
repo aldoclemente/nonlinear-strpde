@@ -8,15 +8,15 @@
 #include <stdexcept>
 #include <algorithm>
 
+template<typename Tx, typename Ty>
 class KFoldCV {
 public:
-    using matrix_t = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic>;
     using index_t  = Eigen::Index;
 
     // Construct K folds from X (n x p) and Y (n x q).
     // If shuffle=true, rows are randomly permuted with the given seed before splitting.
-    KFoldCV(const matrix_t& X,
-            const matrix_t& Y,
+    KFoldCV(const Tx& X,
+            const Ty& Y,
             int K,
             bool shuffle = true,
             uint64_t seed = 42)
@@ -76,15 +76,15 @@ public:
     }
 
     // Materialize matrices for a specific fold k (0-based)
-    matrix_t X_train(int k) const { return take_rows_(X_, train_indices(k)); }
-    matrix_t Y_train(int k) const { return take_rows_(Y_, train_indices(k)); }
-    matrix_t X_test (int k) const { return take_rows_(X_, at_(folds_, k)); }
-    matrix_t Y_test (int k) const { return take_rows_(Y_, at_(folds_, k)); }
+    Tx X_train(int k) const { return take_rows_(X_, train_indices(k)); }
+    Ty Y_train(int k) const { return take_rows_(Y_, train_indices(k)); }
+    Tx X_test (int k) const { return take_rows_(X_, at_(folds_, k)); }
+    Ty Y_test (int k) const { return take_rows_(Y_, at_(folds_, k)); }
 
 private:
     int K_;
-    const matrix_t& X_;
-    const matrix_t& Y_;
+    const Tx& X_;
+    const Ty& Y_;
     std::vector<std::vector<int>> folds_; // test folds only
 
     void check_k_(int k) const {
@@ -96,9 +96,10 @@ private:
         return v[static_cast<std::size_t>(k)];
     }
 
-    // Utility: gather specified rows from M into a new matrix_t
-    static matrix_t take_rows_(const matrix_t& M, const std::vector<int>& rows) {
-        matrix_t out(static_cast<index_t>(rows.size()), M.cols());
+    // Utility: gather specified rows from M into a new matrix T
+    template<typename T>
+    static T take_rows_(const T& M, const std::vector<int>& rows) {
+        T out(static_cast<index_t>(rows.size()), M.cols());
         for (index_t i = 0; i < static_cast<index_t>(rows.size()); ++i) {
             out.row(i) = M.row(static_cast<index_t>(rows[static_cast<std::size_t>(i)]));
         }

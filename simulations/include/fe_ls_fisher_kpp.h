@@ -359,7 +359,7 @@ class fe_ls_fisher_kpp{
         auto reac = integral(fe_space_->triangulation())(reaction_ * f_old * uh * vh);
 
         vector_t f__ = vector_t::Zero(n_dofs_ * m_);
-        
+
         block_map_t f(f__, n_dofs_);
         block_map_t g(g__, n_dofs_);
         
@@ -423,7 +423,6 @@ class fe_ls_fisher_kpp{
     // main fit entry point
     template <typename Optimizer, typename... Callbacks>
     const vector_t& fit(double lambda, const vector_t& g_init, Optimizer&& opt, Callbacks&&... callbacks) {
-      std::cout << "NEL FIT" << std::endl;
         g_ = opt.optimize(obj_t(*this, lambda, tol_), g_init, std::forward<Callbacks>(callbacks)...);
         f_ = state(g_);
         p_ = adjoint(f_);
