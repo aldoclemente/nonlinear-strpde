@@ -67,7 +67,7 @@ int main (){
     }})> ic;
 
     double T = 1.0, DeltaT = 0.1;
-    int n_times = std::ceil(T/DeltaT);
+    int n_times = std::ceil(T/DeltaT) + 1;
     vector_t time_mesh = vector_t::Zero(n_times);
     for(int t = 0; t < n_times; t++) time_mesh[t] = DeltaT*t;
     Eigen::saveMarket(time_mesh, data_dir + "time_mesh.mtx");

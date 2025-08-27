@@ -56,8 +56,6 @@ int main(int argc, char *argv[]){
 
     matrix_t obs = read_mtx<double>(sim_dir + "obs.mtx");
     
-    std::cout << "obs\n"  << obs.rows() << " " << obs.cols() << std::endl;
-
     GeoFrame data(unit_square, T);
     auto &l = data.insert_scalar_layer<POLYGON, POINT>(
                 "layer", std::pair{data_dir + "incidence_matrix.csv", time_locs}); 
@@ -76,10 +74,7 @@ int main(int argc, char *argv[]){
     optimizer.optimize(parabolic.gcv(100, 476813), lambda_grid);
 
     std::cout << optimizer.optimum()[0] << " " << optimizer.optimum()[1] << std::endl;
-    /* 
-    for(int i=0; i < n_lambda; ++i) std::cout << optimizer.values()[i] << " ";
-    std::cout << std::endl;
- */
+    
     parabolic.fit(optimizer.optimum());
     Eigen::saveMarket(parabolic.f(), sim_dir + "estimate_parabolic.mtx");
  

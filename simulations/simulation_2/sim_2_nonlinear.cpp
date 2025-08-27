@@ -102,7 +102,7 @@ int main(int argc, char *argv[]){
 
             res += std::sqrt( (test_vals - test_obs).reshaped().array().square().mean());
         }
-        std::cout << "lambda " << lambda << " cv_error = " << 1./cv_.k() * res<<  std::endl;
+        //std::cout << "lambda " << lambda << " cv_error = " << 1./cv_.k() * res<<  std::endl;
         return 1./cv_.k() * res;
 
     };
@@ -138,7 +138,7 @@ int main(int argc, char *argv[]){
     matrix_t test_obs = read_mtx<double>(sim_dir + "test_obs.mtx");
     
     rmse[0] = std::sqrt( (test_vals - test_obs).reshaped().array().square().mean()); 
-    std::cout << "rmse nonlinear " << rmse << std::endl;
+    //std::cout << "rmse nonlinear " << rmse << std::endl;
     Eigen::saveMarket(rmse, sim_dir + "rmse_nonlinear.mtx");
     
     std::string command_str = "chown -R 1000:1000 " + data_dir; 

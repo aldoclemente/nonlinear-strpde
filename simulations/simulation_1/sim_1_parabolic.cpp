@@ -69,12 +69,8 @@ int main(int argc, char *argv[]){
     GridSearch<2> optimizer;
     optimizer.optimize(parabolic.gcv(100, 476813), lambda_grid);
 
-    /* std::cout << optimizer.optimum()[0] << " " << optimizer.optimum()[1] << std::endl;
-    for(int i=0; i < n_lambda; ++i) std::cout << optimizer.values()[i] << " ";
-    std::cout << std::endl;
- */
     parabolic.fit(optimizer.optimum());
-    Eigen::saveMarket(locs, sim_dir + "estimate_parabolic.mtx");
+    Eigen::saveMarket(parabolic.f(), sim_dir + "estimate_parabolic.mtx");
 
     // rmse
     auto psi_test = internals::point_basis_eval(Vh, test_locs);

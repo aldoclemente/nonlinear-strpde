@@ -24,7 +24,7 @@ int main(int argc, char *argv[]){
     auto nodes = read_mtx<double>(mesh_dir + "points.mtx");
     auto cells = read_mtx<int>(mesh_dir + "cells.mtx");
     auto boundary = read_mtx<int>(mesh_dir + "boundary.mtx");
-    matrix_t test_locs = read_mtx<double>(data_dir + "test_locs.mtx");
+    matrix_t test_locs = read_mtx<double>("../data/simulation_1/test_locs.mtx");
     
     Triangulation<2, 2> unit_square = Triangulation<2, 2>(nodes, cells, boundary);
 
@@ -74,7 +74,7 @@ int main(int argc, char *argv[]){
     std::cout << std::endl;
  */
     parabolic.fit(optimizer.optimum());
-    Eigen::saveMarket(locs, sim_dir + "estimate_parabolic.mtx");
+    Eigen::saveMarket(parabolic.f(), sim_dir + "estimate_parabolic.mtx");
 
     // rmse
     auto psi_test = internals::point_basis_eval(Vh, test_locs);
@@ -88,6 +88,7 @@ int main(int argc, char *argv[]){
     matrix_t test_obs = read_mtx<double>(sim_dir + "test_obs.mtx");
     
     rmse[0] = std::sqrt( (test_vals - test_obs).reshaped().array().square().mean()); 
+    std::cout << "rmse: " << rmse << std::endl;
    
     Eigen::saveMarket(rmse, sim_dir + "rmse_parabolic.mtx");
     
