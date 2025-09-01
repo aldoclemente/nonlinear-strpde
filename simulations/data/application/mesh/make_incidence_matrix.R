@@ -1,9 +1,9 @@
 library(fdaPDE)
 
-nodes = read.table("nodes.txt", header = F)
-cells = read.table("cells.txt", header = F)
-boundary = read.table("boundary.txt", header = F)
-regions = read.table("regions.txt", header = F)
+nodes = as.matrix(read.table("nodes.txt", header = F))
+cells = as.matrix(read.table("cells.txt", header = F))
+boundary_idx = as.matrix(read.table("boundary.txt", header = F))
+regions = as.matrix(read.table("regions.txt", header = F))
 
 #  #(1001:1035, 2001:2035) x #cells, see $FREESURFER/FreeSurferColorLUT.txt  
 
@@ -16,5 +16,8 @@ for(i in 1:length(ctx)){
 rowSums(incidence_matrix)
 write.csv(incidence_matrix, file = "incidence_matrix.csv")
 write.csv(format(nodes, digits=16), file="nodes.csv")
+
+boundary = matrix(0, nrow = nrow(nodes), ncol=1)
+boundary[boundary_idx] = 1
 write.csv(boundary, file="boundary.csv")
 write.csv(cells, file="cells.csv")
