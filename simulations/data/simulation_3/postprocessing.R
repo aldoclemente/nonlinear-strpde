@@ -77,7 +77,7 @@ for(t in 1:n_times){
   parabolic[[t]] = fe_function(domain, type="P1", par_coeff[,t])
 }
 
-FElist = c(exact, nonlin, parabolic) 
+FE_list = c(exact, nonlin, parabolic) 
 
 #
 incidence_matrix = read.csv("incidence_matrix.csv")[,-1]

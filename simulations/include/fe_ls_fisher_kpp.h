@@ -448,6 +448,13 @@ class fe_ls_fisher_kpp{
     const vector_t& beta() const { return beta_; }
     const vector_t& misfit() const { return g_; }
     const vector_t& response() const { return y_; }
+    vector_t fn() const{
+        vector_t fn_ = vector_t::Zero(n_*m_);
+        for(int t = 0; t < m_; ++t){
+            fn_.block(n_*t, 0, n_, 1) = Psi_ * f_.block(n_dofs_ * t, 0, n_dofs_, 1); 
+        } 
+        
+        return fn_; }
    protected:
     std::optional<std::array<double, n_lambda>> lambda_saved_ = std::array<double, n_lambda> {-1};
     sparse_solver_t invA_, invAs_;

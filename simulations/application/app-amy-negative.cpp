@@ -50,18 +50,27 @@ int main(int argc, char *argv[]){
     int n_folds = 10; 
     KFoldCV cv_outer(incidence_matrix, obs, n_folds);
 
+    //std::cout << incidence_matrix.rows() << " " << incidence_matrix.cols() << std::endl;
+    //std::cout << obs.rows() << " " << obs.cols() << std::endl;
+    
     // first col: nonlin
     // second col: parabolic (without alpha)
     // third col : parabolic (with alpha)
     matrix_t cv_error = matrix_t::Zero(n_folds,3);
 
     double alpha = -0.143; // see Shafer et al.
-    vector_t IC = read_mtx<double>(data_dir + "IC.mtx");
+    vector_t IC = read_mtx<double>(data_dir + "IC.mtx").reshaped();
+    //std::cout << "IC " << IC.rows() << " " << IC.cols() << std::endl;
 
-    for(int iter=0; iter<10; ++iter){
+    for(int iter=0; iter<n_folds; ++iter){
         
         auto incidence_matrix_iter = cv_outer.X_train(iter);
         auto obs_iter = cv_outer.Y_train(iter);
+
+        std::cout << "\t fold: " << iter+1 << "/"<< n_folds <<  std::endl;
+        
+        //std::cout << incidence_matrix_iter.rows() << " " << incidence_matrix_iter.cols() << std::endl;
+        //std::cout << obs_iter.rows() << " " << obs_iter.cols() << std::endl;
     
         GeoFrame data(brain, T);
         auto bm = BinaryMatrix<Dynamic, Dynamic> (incidence_matrix_iter.rows(), incidence_matrix_iter.cols());
@@ -139,6 +148,7 @@ int main(int argc, char *argv[]){
         }
 
         cv_error(iter,0) = std::sqrt( (test_vals - test_obs).reshaped().array().square().mean());
+        std::cout << " nonlin ended." << std::endl;
         // ----------------------------------------------------------------------------------------------------------------
         // PARABOLIC 1
         auto a_par = integral(brain)(mu * dot(grad(u), grad(v)));
@@ -154,7 +164,8 @@ int main(int argc, char *argv[]){
         }
 
         cv_error(iter,1) = std::sqrt( (test_vals - test_obs).reshaped().array().square().mean());
-
+        std::cout << " parabolic ended." << std::endl;
+        
         // PARABOLIC 2
         auto a_par2 = integral(brain)(mu * dot(grad(u), grad(v)) - alpha*u*v);
         SRPDE parabolic2("y ~ f", data, fe_ls_parabolic_mono(std::pair{a_par2, F_par}, IC));
@@ -168,7 +179,8 @@ int main(int argc, char *argv[]){
         }
 
         cv_error(iter,2) = std::sqrt( (test_vals - test_obs).reshaped().array().square().mean());
-
+        std::cout << " parabolic2 ended." << std::endl;
+        
         Eigen::saveMarket(nonlinear.f(), data_dir  + "estimate_nonlinear_" +  std::to_string(iter) + ".mtx");
         Eigen::saveMarket(parabolic.f(), data_dir  + "estimate_parabolic_" +  std::to_string(iter) + ".mtx");
         Eigen::saveMarket(parabolic2.f(), data_dir + "estimate_parabolic2_"+  std::to_string(iter) + ".mtx");

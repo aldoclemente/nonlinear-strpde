@@ -63,6 +63,7 @@ int main(int argc, char *argv[]){
     
     GeoFrame data(unit_square, T);
     auto bm = BinaryMatrix<Dynamic, Dynamic> (incidence_matrix.rows(), incidence_matrix.cols());
+    bm = incidence_matrix;
     auto &l = data.insert_scalar_layer<POLYGON, POINT>(
                 "layer", std::pair{bm, time_locs}); 
     l.load_vec("y", obs.reshaped() ); 
@@ -91,6 +92,7 @@ int main(int argc, char *argv[]){
 
             GeoFrame data(unit_square, T);
             auto bm = BinaryMatrix<Dynamic, Dynamic> (incidence_mtx.rows(), incidence_mtx.cols());
+            bm = incidence_mtx;
             auto &l = data.insert_scalar_layer<POLYGON, POINT>(
                                 "layer", std::pair{bm, time_locs}); 
             l.load_vec("y", obs.reshaped() ); 
