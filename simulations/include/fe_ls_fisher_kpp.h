@@ -6,7 +6,7 @@
 namespace fdapde{
 namespace internals{
 
-template <typename FeSpace>
+template <typename FeSpace, typename FeSpaceControl>
 class fe_ls_fisher_kpp{
  private:
     using vector_t = Eigen::Matrix<double, Dynamic, 1>;
@@ -185,13 +185,15 @@ class fe_ls_fisher_kpp{
     template <typename PDEparam> 
     void discretize(PDEparam&& pde_param) {
         fe_space_ = const_cast<FeSpace*>(std::addressof(pde_param.fe_space()));   // store fe_space
-
+        fe_space_control_ = const_cast<FeSpaceControl*>(std::addressof(pde_param.fe_space_control()));   // store fe_space
+        
         TrialFunction uh(*fe_space_);
         TestFunction vh(*fe_space_);
-	
+
         diffusion_ = pde_param.diffusion();
         reaction_ = pde_param.reaction();
-        n_dofs_ = fe_space_->n_dofs();        
+        n_dofs_ = fe_space_->n_dofs();
+       
         f_old = FeFunction<FeSpace>(*fe_space_, vector_t::Zero(n_dofs_));
 
         // discretization
@@ -200,6 +202,17 @@ class fe_ls_fisher_kpp{
         internals::fe_mass_assembly_loop<FeSpace> mass_assembler(bilinear_form.trial_space());	
         M_ = mass_assembler.assemble();
         A_ = bilinear_form.assemble();
+        
+        n_dofs_control_ =  fe_space_control_->n_dofs();
+        TrialFunction qh(*fe_space_control_);
+        TestFunction ph(*fe_space_control_);
+        auto mass_control =
+          integral(fe_space_->triangulation())(qh*ph);
+        N_ = mass_control.assemble();
+
+        auto control_to_state = integral(fe_space_->triangulation())(vh * qh);
+        B = control_to_state.assemble();
+
         // u_space_ = linear_form.assemble();
         //  store handles for basis system evaluation at locations
         point_eval_ = [fe_space = bilinear_form.trial_space()](const matrix_t& locs) -> decltype(auto) {
@@ -291,9 +304,11 @@ class fe_ls_fisher_kpp{
     double J(vector_t& f__, vector_t& g__, double lambda_D) const {
         block_map_t y(y_, n_);
         block_map_t f(f__, n_dofs_);
-        block_map_t g(g__, n_dofs_);
+        block_map_t g(g__, n_dofs_control_);
         double sse = 0;
-        for (int t = 0; t < m_; ++t) { sse += (y(t) - Psi_ * f(t)).squaredNorm() + lambda_D * g(t).squaredNorm(); }
+        for (int t = 0; t < m_; ++t) { sse += (y(t) - Psi_ * f(t)).squaredNorm() + lambda_D * (g(t).transpose()*(N_*g(t)))(0,0); }
+        std::cout << "\t--- inner --- " << std::endl;
+        std::cout << "sse: " << sse << std::endl;
         return sse;
     }
 
@@ -306,7 +321,7 @@ class fe_ls_fisher_kpp{
             vector_t tmp = g__;
             vector_t f__ = model_->state(tmp);
             block_map_t f(f__, model_->n_dofs());
-            block_map_t g(tmp, model_->n_dofs());
+            block_map_t g(tmp, model_->n_dofs_control());
             
             vector_t y__ = model_->response(); 
             // Male male.... State e Adjoint dovrebbero lavorare sia con const& che con &...
@@ -314,7 +329,7 @@ class fe_ls_fisher_kpp{
             block_map_t y(y__, model_->n());
             double sse = 0;
             for (int t = 0; t < model_->m(); ++t) {
-                sse += (y(t) - model_->Psi() * f(t)).squaredNorm() + lambda_ * g(t).squaredNorm();
+                sse += (y(t) - model_->Psi() * f(t)).squaredNorm() + lambda_ * (g(t).transpose()*(model_->mass_control()*g(t)))(0,0);  //g(t).squaredNorm();
             }
             return sse;
         }
@@ -327,13 +342,15 @@ class fe_ls_fisher_kpp{
                 vector_t f__ = model_->state(tmp);
                 vector_t p__ = model_->adjoint(f__);
 
-                block_map_t g(tmp, model_->n_dofs());
+                block_map_t g(tmp, model_->n_dofs_control());
                 block_map_t p(p__, model_->n_dofs());
                 
-                vector_t grad__ = vector_t::Zero(model_->m() * model_->n_dofs());
-                block_map_t grad(grad__, model_->n_dofs());
+                vector_t grad__ = vector_t::Zero(model_->m() * model_->n_dofs_control());
+                block_map_t grad(grad__, model_->n_dofs_control());
 
-                for (int t = 0; t < model_->m(); ++t) { grad(t) = lambda_ * g(t) - p(t); }
+                for (int t = 0; t < model_->m(); ++t) { grad(t) = lambda_ * model_->mass_control() * g(t) - model_->control_to_state().transpose() * p(t); } 
+                
+                //{ grad(t) = lambda_ * model_ -> mass() * g(t) - model_->mass() * p(t); }
                 return grad__;
             };
         }
@@ -342,27 +359,35 @@ class fe_ls_fisher_kpp{
             bool stop;
             double loss_old = this->operator()(opt.x_old);
             double loss_new = this->operator()(opt.x_new);
-            stop = std::abs((loss_new - loss_old) / loss_old) < tol_;
+
+            vector_t grad_old = this->gradient()(opt.x_old);
+            vector_t grad_new = this->gradient()(opt.x_new);
+            stop = std::abs((loss_new - loss_old) / loss_old) < tol_; //&& grad_new.norm() < 100*tol_; // (grad_old-grad_new).norm()/grad_old.norm() < tol_;
+            
             return stop;
         }
        private:
         fe_ls_fisher_kpp* model_;
         double lambda_;
-        double tol_ = 1e-5;
+        double tol_ = 1e-8;
     };
    private:
     vector_t state(vector_t& g__) {
+        std::cout << "state" << std::endl;
         TrialFunction uh(*fe_space_);
         TestFunction vh(*fe_space_);
 
+        //vector_t forc = read_mtx<double>("data/mesh/forcing_coeff_pde_sol.mtx");
+        //FeCoeff<2, 1, 1, vector_t> forcing(forc);
+        //vector_t F_ = integral(fe_space_->triangulation())(forcing*vh).assemble();
         FeFunction<FeSpace> f_old(*fe_space_);
         auto reac = integral(fe_space_->triangulation())(reaction_ * f_old * uh * vh);
 
         vector_t f__ = vector_t::Zero(n_dofs_ * m_);
-
-        block_map_t f(f__, n_dofs_);
-        block_map_t g(g__, n_dofs_);
         
+        block_map_t f(f__, n_dofs_);
+        block_map_t g(g__, n_dofs_control_);
+        std::cout<< "ci arrivi?" << std::endl;
         for (int t = -1; t < m_ - 1; t++) {
             f_old = t == -1 ? s_ : f(t);
             auto R_ = reac.assemble();
@@ -373,7 +398,7 @@ class fe_ls_fisher_kpp{
 
             sparse_solver_t lin_solver(S);
             lin_solver.factorize(S);
-            vector_t b = 1. / DeltaT_ * M_ * f_old.coeff() + M_ * g(t + 1);
+            vector_t b = 1. / DeltaT_ * M_ * f_old.coeff() + B * g(t + 1); //+ F_;
             f(t + 1) = lin_solver.solve(b);
         }
 
@@ -381,6 +406,7 @@ class fe_ls_fisher_kpp{
     }
 
     vector_t adjoint(vector_t& f__) {
+        std::cout << "adjoint" << std::endl;
         TrialFunction uh(*fe_space_);
         TestFunction vh(*fe_space_);
 
@@ -401,7 +427,8 @@ class fe_ls_fisher_kpp{
             auto R_ = reac.assemble();
             R_.makeCompressed();
 
-            sparse_matrix_t S = 1. / DeltaT_ * M_ + A_ + 2. * R_;
+            sparse_matrix_t tmp = (A_ + 2. * R_).transpose();
+            sparse_matrix_t S = 1. / DeltaT_ * M_ + tmp;
             S.makeCompressed();
 
             sparse_solver_t lin_solver(S);
@@ -438,6 +465,7 @@ class fe_ls_fisher_kpp{
 
     // observers
     int n_dofs() const { return n_dofs_; }
+    int n_dofs_control() const { return n_dofs_control_; }
     int n() const { return n_; }
     int m() const { return m_; }
     const sparse_matrix_t& mass() const { return M_; }
@@ -448,24 +476,50 @@ class fe_ls_fisher_kpp{
     const vector_t& beta() const { return beta_; }
     const vector_t& misfit() const { return g_; }
     const vector_t& response() const { return y_; }
+    const sparse_matrix_t& control_to_state() const {return B;}
+    const sparse_matrix_t& mass_control() const {return N_;}
+    //Triangulation& triangulation() const { return *(fe_space_).triangulation();}
+    //FeSpace* fe_space() const { return fe_space_; }
+
     vector_t fn() const{
         vector_t fn_ = vector_t::Zero(n_*m_);
+
+        //block_map_t y(y_, n_);
+        //block_map_t f(f_, n_dofs_);
+        //block_map_t fn(fn_, n_);
+        
+        
+        //for (int t = 0; t < m_; ++t) { fn(t) = Psi_ * f(t); }
+
         for(int t = 0; t < m_; ++t){
             fn_.block(n_*t, 0, n_, 1) = Psi_ * f_.block(n_dofs_ * t, 0, n_dofs_, 1); 
         } 
         
         return fn_; }
+    
+    double objective(double lambda_D){
+        block_map_t y(y_, n_);
+        block_map_t f(f_, n_dofs_);
+        block_map_t g(g_, n_dofs_);
+        double sse = 0;
+        for (int t = 0; t < m_; ++t) { sse += (y(t) - Psi_ * f(t)).squaredNorm() + lambda_D * (g(t).transpose()*(N_*g(t)))(0,0);}
+        return sse;
+    }
+    
    protected:
     std::optional<std::array<double, n_lambda>> lambda_saved_ = std::array<double, n_lambda> {-1};
     sparse_solver_t invA_, invAs_;
 
-    int n_dofs_ = 0, n_obs_ = 0, n_covs_ = 0;
+    int n_dofs_ = 0, n_obs_ = 0, n_covs_ = 0, n_dofs_control_ = 0;
     int n_locs_ = 0, n_ = 0, m_ = 0;   // n_: number of spatial locations, m_: number of time instants
 
     sparse_matrix_t M_;     // n_dofs x n_dofs matrix [R0]_{ij} = \int_D \psi_i * \psi_j
     sparse_matrix_t A_;     // n_dofs x n_dofs matrix [R1]_{ij} = \int_D a(\psi_i, \psi_j)
     sparse_matrix_t R_;     // n_dofs x n_dofs matrix [R]_{ij} = \int_D (r * \f \psi_i * \psi_j) // non linear reaction
     sparse_matrix_t Psi_;   // n_obs x n_dofs matrix [Psi]_{ij} = \psi_j(p_i)
+    
+    sparse_matrix_t N_;
+    sparse_matrix_t B;
     std::vector<sparse_matrix_t> B_;   // m x (n_obs x n_obs) vector of na-corrected \Psi matrices
     vector_t u_, u0_;                  // (n_dofs * m) x 1 vector u = [u_1 + + M_*s / DeltaT, u_2, \ldots, u_n]
     vector_t u_space_;
@@ -487,6 +541,7 @@ class fe_ls_fisher_kpp{
     double DeltaT_;
 
     FeSpace* fe_space_ = nullptr;
+    FeSpaceControl* fe_space_control_ = nullptr;
     FeFunction<FeSpace> f_old;
 
     diffusion_t diffusion_;
@@ -495,9 +550,9 @@ class fe_ls_fisher_kpp{
 
 } // internals
 
-template <typename PDEparam, typename FeSpace> struct fe_ls_fisher_kpp {
+template <typename PDEparam, typename FeSpace, typename FeSpaceControl> struct fe_ls_fisher_kpp {
     using Scalar = double;
-    using solver_t = internals::fe_ls_fisher_kpp<FeSpace>;
+    using solver_t = internals::fe_ls_fisher_kpp<FeSpace, FeSpaceControl>;
     using Triangulation = FeSpace::Triangulation;
     using matrix_t = Eigen::Matrix<Scalar, Dynamic, Dynamic>;
     using vector_t = Eigen::Matrix<Scalar, Dynamic, 1>;
@@ -523,15 +578,17 @@ template <typename PDEparam, typename FeSpace> struct fe_ls_fisher_kpp {
         diffusion_t diffusion_;
         reaction_t reaction_;
         const FeSpace& fe_space_;
+        const FeSpaceControl& fe_space_control_;
         vector_t ic_;
         int max_iter_ = 100;
         double tol_ = 1e-4;
         int n_quadrature_nodes = 0;
        public:
         pde_param_packet(
-          const Diffusion& diffusion, const Reaction& reaction, const FeSpace& fe_space, const vector_t& ic,
+          const Diffusion& diffusion, const Reaction& reaction, const FeSpace& fe_space, const FeSpaceControl& fe_space_control, const vector_t& ic,
           int max_iter, double tol) :
             fe_space_(fe_space),
+            fe_space_control_(fe_space_control),
             ic_(ic),
             max_iter_(max_iter),
             tol_(tol),
@@ -568,14 +625,15 @@ template <typename PDEparam, typename FeSpace> struct fe_ls_fisher_kpp {
         const diffusion_t& diffusion() const { return diffusion_; }
         const reaction_t& reaction() const { return reaction_; }
         const FeSpace& fe_space() const { return fe_space_; }
+        const FeSpaceControl& fe_space_control() const { return fe_space_control_; }
         int max_iter() const { return max_iter_; }
         double tol() const { return tol_; }
         const vector_t& ic() const { return ic_; }
     };
    public:
     fe_ls_fisher_kpp(
-      const PDEparam& pde_param, const FeSpace& fe_space, vector_t ic, int max_iter = 100, double tol = 1e-4) :
-        pde_param_(std::get<0>(pde_param), std::get<1>(pde_param), fe_space, ic, max_iter, tol) { }
+      const PDEparam& pde_param, const FeSpace& fe_space, const FeSpaceControl& fe_space_control, vector_t ic, int max_iter = 100, double tol = 1e-4) :
+        pde_param_(std::get<0>(pde_param), std::get<1>(pde_param), fe_space, fe_space_control, ic, max_iter, tol) { }
     const pde_param_packet& get() const { return pde_param_; }
    private:
     pde_param_packet pde_param_;
