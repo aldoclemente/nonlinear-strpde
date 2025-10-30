@@ -2,9 +2,16 @@
 #define __FE_LS_FISHER_KPP_H__
 
 #include <fdaPDE/src/solvers/header_check.h>
-
 namespace fdapde{
 namespace internals{
+
+template<typename T>
+void range(const Eigen::SparseMatrix<T>& A){
+    auto max = A.coeffs().maxCoeff();
+    auto min = A.coeffs().minCoeff();
+    std::cout << "matrix values: " << min << " " << max << std::endl; 
+}
+
 
 template <typename FeSpace, typename FeSpaceControl>
 class fe_ls_fisher_kpp{
@@ -198,11 +205,14 @@ class fe_ls_fisher_kpp{
 
         // discretization
         auto bilinear_form =
-          integral(fe_space_->triangulation())(dot(diffusion_ * grad(uh), grad(vh)) - reaction_ * uh * vh);
+          integral(fe_space_->triangulation())(dot(diffusion_*grad(uh), grad(vh)) - reaction_ * uh * vh); // FEcoeff
         internals::fe_mass_assembly_loop<FeSpace> mass_assembler(bilinear_form.trial_space());	
         M_ = mass_assembler.assemble();
         A_ = bilinear_form.assemble();
-        
+        m_lump = M_.diagonal() ;//*vector_t::Ones(n_dofs_);
+        M_lump = sparse_matrix_t(n_dofs_, n_dofs_);
+        for(int i = 0; i<n_dofs_; ++i) M_lump.insert(i,i) = m_lump[i];
+
         n_dofs_control_ =  fe_space_control_->n_dofs();
         TrialFunction qh(*fe_space_control_);
         TestFunction ph(*fe_space_control_);
@@ -307,8 +317,6 @@ class fe_ls_fisher_kpp{
         block_map_t g(g__, n_dofs_control_);
         double sse = 0;
         for (int t = 0; t < m_; ++t) { sse += (y(t) - Psi_ * f(t)).squaredNorm() + lambda_D * (g(t).transpose()*(N_*g(t)))(0,0); }
-        std::cout << "\t--- inner --- " << std::endl;
-        std::cout << "sse: " << sse << std::endl;
         return sse;
     }
 
@@ -329,7 +337,7 @@ class fe_ls_fisher_kpp{
             block_map_t y(y__, model_->n());
             double sse = 0;
             for (int t = 0; t < model_->m(); ++t) {
-                sse += (y(t) - model_->Psi() * f(t)).squaredNorm() + lambda_ * (g(t).transpose()*(model_->mass_control()*g(t)))(0,0);  //g(t).squaredNorm();
+                sse += 1. / (model_->m() * model_->n()) *(y(t) - model_->Psi() * f(t)).squaredNorm() + lambda_ * (g(t).transpose()*(model_->mass_control()*g(t)))(0,0);  //g(t).squaredNorm();
             }
             return sse;
         }
@@ -340,7 +348,8 @@ class fe_ls_fisher_kpp{
                 
                 vector_t tmp = g__;
                 vector_t f__ = model_->state(tmp);
-                vector_t p__ = model_->adjoint(f__);
+                //
+                vector_t p__ = model_->adjoint(f__); // lambda_
 
                 block_map_t g(tmp, model_->n_dofs_control());
                 block_map_t p(p__, model_->n_dofs());
@@ -348,9 +357,8 @@ class fe_ls_fisher_kpp{
                 vector_t grad__ = vector_t::Zero(model_->m() * model_->n_dofs_control());
                 block_map_t grad(grad__, model_->n_dofs_control());
 
-                for (int t = 0; t < model_->m(); ++t) { grad(t) = lambda_ * model_->mass_control() * g(t) - model_->control_to_state().transpose() * p(t); } 
-                
-                //{ grad(t) = lambda_ * model_ -> mass() * g(t) - model_->mass() * p(t); }
+                for (int t = 0; t < model_->m(); ++t){ grad(t) = lambda_ * model_->mass_control()* g(t) - model_->control_to_state().transpose() * p(t);} 
+             
                 return grad__;
             };
         }
@@ -373,40 +381,42 @@ class fe_ls_fisher_kpp{
     };
    private:
     vector_t state(vector_t& g__) {
-        std::cout << "state" << std::endl;
+        
         TrialFunction uh(*fe_space_);
         TestFunction vh(*fe_space_);
-
-        //vector_t forc = read_mtx<double>("data/mesh/forcing_coeff_pde_sol.mtx");
-        //FeCoeff<2, 1, 1, vector_t> forcing(forc);
-        //vector_t F_ = integral(fe_space_->triangulation())(forcing*vh).assemble();
-        FeFunction<FeSpace> f_old(*fe_space_);
-        auto reac = integral(fe_space_->triangulation())(reaction_ * f_old * uh * vh);
-
+ 
         vector_t f__ = vector_t::Zero(n_dofs_ * m_);
-        
         block_map_t f(f__, n_dofs_);
         block_map_t g(g__, n_dofs_control_);
-        std::cout<< "ci arrivi?" << std::endl;
-        for (int t = -1; t < m_ - 1; t++) {
-            f_old = t == -1 ? s_ : f(t);
+        
+        FeFunction<FeSpace> f_old(*fe_space_, s_);
+        auto reac = integral(fe_space_->triangulation())(reaction_ * f_old * uh * vh);
+        for (int t = 0; t < m_; ++t) {
+
+            if(t!=0) f_old = f(t-1);
+            
             auto R_ = reac.assemble();
             R_.makeCompressed();
+            
+            // auto r2 = (m_lump.array() * f_old.coeff().array()).matrix(); 
+            // sparse_matrix_t R2(n_dofs_, n_dofs_);
+            // for(int i=0; i<n_dofs_; ++i) R2.insert(i,i) = r2[i];
 
+            // semi-implicit euler
             sparse_matrix_t S = 1. / DeltaT_ * M_ + A_ + R_;
             S.makeCompressed();
 
             sparse_solver_t lin_solver(S);
             lin_solver.factorize(S);
-            vector_t b = 1. / DeltaT_ * M_ * f_old.coeff() + B * g(t + 1); //+ F_;
-            f(t + 1) = lin_solver.solve(b);
+            vector_t b = 1. / DeltaT_ * M_ * f_old.coeff() + B * g(t); //+ F_;
+            f(t) = lin_solver.solve(b);
         }
-
         return f__;
     }
 
-    vector_t adjoint(vector_t& f__) {
-        std::cout << "adjoint" << std::endl;
+    // adjoint DEVE dipendere da lambda ?!
+    vector_t adjoint(vector_t& f__, double lambda=1.0) {
+        
         TrialFunction uh(*fe_space_);
         TestFunction vh(*fe_space_);
 
@@ -421,46 +431,54 @@ class fe_ls_fisher_kpp{
         int n_fact = (B_.size() != 0 || !W_const_) ? m_ : 1;   // != 1 if missing or heteroschedastic observations
         auto PsiNA = [&](int t) -> const sparse_matrix_t& { return B_.size() != 0 ? B_[t] : Psi_; };
         auto W = [&](int i) { return W_.block(i * n_, i * n_, n_, n_); };
+        vector_t p_next = vector_t::Zero(n_dofs_); 
+        sparse_matrix_t Im(m_,m_);
+        Im.setIdentity();
+        auto Mt = kronecker(Im, M_);
+        auto PsiT = kronecker(Im, Psi_);
+        for (int t = m_-1; t >=0; --t) {
+            
+            f_old = t == 0 ? s_ : f(t-1);  
+            if(t != (m_-1)) p_next = p(t+1);
 
-        for (int t = m_ - 1; t > 0; t--) {
-            f_old = f(t - 1);
             auto R_ = reac.assemble();
             R_.makeCompressed();
-
+            
+            // auto r2 = (m_lump.array() * f_old.coeff().array()).matrix(); 
+            // sparse_matrix_t R2(n_dofs_, n_dofs_);
+            // for(int i=0; i<n_dofs_; ++i) R2.insert(i,i) = r2[i];
+            // semi implicit euler
             sparse_matrix_t tmp = (A_ + 2. * R_).transpose();
             sparse_matrix_t S = 1. / DeltaT_ * M_ + tmp;
+            S*=lambda;
             S.makeCompressed();
 
             sparse_solver_t lin_solver(S);
             lin_solver.factorize(S);
-
-            vector_t b = 1. / DeltaT_ * M_ * p(t) -
-                         //(1 - lambda_) * PsiTPsi_ * get_t(y, t - 1) +
-                         //(1 - lambda_) * Psi_.transpose() * obs(t - 1);
-                         1. / (m_ * n_) * PsiNA(t).transpose() * D_ * W(t) * PsiNA(t) * f(t - 1) +
-                         1. / (m_ * n_) * PsiNA(t).transpose() * D_ * W(t) * y(t - 1);
-
             
-            p(t - 1) = lin_solver.solve(b);
-        }
+            vector_t b = lambda / DeltaT_ * M_ * p_next + 1./(m_*n_)*PsiNA(t).transpose() * D_ * W(t) * (y(t) - PsiNA(t) * f(t));             
 
+            p(t) = lin_solver.solve(b);
+        }
+        
         return p__;
     }
    public:
     // main fit entry point
     template <typename Optimizer, typename... Callbacks>
     const vector_t& fit(double lambda, const vector_t& g_init, Optimizer&& opt, Callbacks&&... callbacks) {
+        
         g_ = opt.optimize(obj_t(*this, lambda, tol_), g_init, std::forward<Callbacks>(callbacks)...);
         f_ = state(g_);
-        p_ = adjoint(f_);
+        p_ = adjoint(f_); // lambda
         return f_;
     }
 
-    template <typename LambdaT>
+    template <typename Optimizer, typename LambdaT, typename... Callbacks>
         requires(internals::is_vector_like_v<LambdaT>)
-    const vector_t& fit(LambdaT&& lambda) {
+    const vector_t& fit(LambdaT&& lambda, const vector_t& g_init, Optimizer&& opt, Callbacks&&... callbacks) {
         fdapde_assert(lambda.size() == n_lambda);
-        return fit(lambda[0]);
+        return fit(lambda[0], g_init, opt, std::forward<Callbacks>(callbacks)...);
     }
 
     // observers
@@ -469,6 +487,7 @@ class fe_ls_fisher_kpp{
     int n() const { return n_; }
     int m() const { return m_; }
     const sparse_matrix_t& mass() const { return M_; }
+    const sparse_matrix_t& mass_lump() const { return M_lump; }   
     const sparse_matrix_t& stiff() const { return A_; }
     const sparse_matrix_t& Psi() const { return Psi_; }
     const vector_t& force() const { return u_; }
@@ -483,13 +502,6 @@ class fe_ls_fisher_kpp{
 
     vector_t fn() const{
         vector_t fn_ = vector_t::Zero(n_*m_);
-
-        //block_map_t y(y_, n_);
-        //block_map_t f(f_, n_dofs_);
-        //block_map_t fn(fn_, n_);
-        
-        
-        //for (int t = 0; t < m_; ++t) { fn(t) = Psi_ * f(t); }
 
         for(int t = 0; t < m_; ++t){
             fn_.block(n_*t, 0, n_, 1) = Psi_ * f_.block(n_dofs_ * t, 0, n_dofs_, 1); 
@@ -514,6 +526,10 @@ class fe_ls_fisher_kpp{
     int n_locs_ = 0, n_ = 0, m_ = 0;   // n_: number of spatial locations, m_: number of time instants
 
     sparse_matrix_t M_;     // n_dofs x n_dofs matrix [R0]_{ij} = \int_D \psi_i * \psi_j
+    
+    vector_t m_lump;        // m_lump_i = sum_j M(i,j) = M * Ones(n_dofs_,1) 
+    sparse_matrix_t M_lump; // 
+
     sparse_matrix_t A_;     // n_dofs x n_dofs matrix [R1]_{ij} = \int_D a(\psi_i, \psi_j)
     sparse_matrix_t R_;     // n_dofs x n_dofs matrix [R]_{ij} = \int_D (r * \f \psi_i * \psi_j) // non linear reaction
     sparse_matrix_t Psi_;   // n_obs x n_dofs matrix [Psi]_{ij} = \psi_j(p_i)

@@ -9,6 +9,7 @@
 #include <chrono> 
 #include <filesystem>
 #include <limits>
+#include <algorithm>
 #include <Eigen/Dense>
 #include <unsupported/Eigen/SparseExtra>
 
@@ -164,4 +165,81 @@ auto noise(std::size_t nrow, std::size_t ncol, double sigma, std::mt19937 gen) {
       }
     }
     return res;
+}
+
+
+template<class Scalar>
+Eigen::SparseMatrix<Scalar> blockDiag(const std::vector<Eigen::SparseMatrix<Scalar>>& blocks) {
+    const int m = static_cast<int>(blocks.size());
+    const int n = blocks.empty() ? 0 : blocks[0].rows(); 
+    Eigen::SparseMatrix<Scalar> M(m*n, m*n);
+
+    std::vector<Eigen::Triplet<Scalar>> T;
+    T.reserve([&]{
+        size_t s = 0;
+        for (auto& A : blocks) s += A.nonZeros();
+        return s;
+    }());
+
+    for (int k = 0; k < m; ++k) {
+        const auto& A = blocks[k];             
+        for (int outer = 0; outer < A.outerSize(); ++outer) {
+            for (typename Eigen::SparseMatrix<Scalar>::InnerIterator it(A, outer); it; ++it) {
+                const int i = it.row();           
+                const int j = it.col();     
+                T.emplace_back(k*n + i, k*n + j, it.value());
+            }
+        }
+    }
+    M.setFromTriplets(T.begin(), T.end());
+    return M;
+}
+
+template<typename T>
+void range(const Eigen::SparseMatrix<T>& A){
+    auto max = A.coeffs().maxCoeff();
+    auto min = A.coeffs().minCoeff();
+    std::cout << "matrix values: " << min << " " << max << std::endl; 
+}
+
+template <typename T>
+Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>
+expand_grid(const std::vector<Eigen::Matrix<T, Eigen::Dynamic, 1>>& factors) {
+    using Mat = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
+
+    const size_t K = factors.size();
+    if (K == 0) return Mat(0, 0);
+
+    // total rows = product of sizes
+    size_t nrows = 1;
+    std::vector<size_t> sz(K);
+    for (size_t j = 0; j < K; ++j) {
+        sz[j] = static_cast<size_t>(factors[j].size());
+        if (sz[j] == 0) return Mat(0, static_cast<Eigen::Index>(K));
+        nrows *= sz[j];
+    }
+
+    Mat M(static_cast<Eigen::Index>(nrows), static_cast<Eigen::Index>(K));
+
+    // prefix products: prod_{t < j} sz[t]
+    std::vector<size_t> prefix(K, 1);
+    for (size_t j = 1; j < K; ++j) prefix[j] = prefix[j - 1] * sz[j - 1];
+
+    for (size_t j = 0; j < K; ++j) {
+        const auto& f = factors[j];
+        const size_t nj = sz[j];
+        const size_t repeat_len = prefix[j];                 // first factor repeats 1, next repeats sz[0], etc.
+        const size_t block = repeat_len * nj;                // size of one full cycle for column j
+        const size_t cycles = nrows / block;
+
+        Eigen::Index row = 0;
+        for (size_t c = 0; c < cycles; ++c) {
+            for (size_t i = 0; i < nj; ++i) {
+                for (size_t r = 0; r < repeat_len; ++r) {
+                    M(row++, static_cast<Eigen::Index>(j)) = f(static_cast<Eigen::Index>(i));
+                }
+            }
+        }
+    }
+    return M;
 }
