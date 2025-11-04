@@ -155,8 +155,9 @@ class fe_ls_fisher_kpp{
 	fdapde_assert(gf.n_layers() == 1);
         n_obs_  = gf[0].rows();
         n_locs_ = n_obs_;
-        discretize(pde_param);
+        std::cout << "constructor 1" << std::endl;
         analyze_data(formula, gf, W);
+        discretize(pde_param);
     }
     template <typename GeoFrame, typename PDEparam>
     fe_ls_fisher_kpp(const std::string& formula, const GeoFrame& gf, PDEparam&& pde_param) :
@@ -179,7 +180,7 @@ class fe_ls_fisher_kpp{
             double lag_i = time_coords(i + 1, 0) - time_coords(i, 0);
             fdapde_assert(DeltaT_ > 0 && lag_i > 0 && almost_equal(DeltaT_ FDAPDE_COMMA lag_i));
         }
-
+        std::cout << "constructor 2" << std::endl;
         discretize(pde_param);
         u_.resize(n_dofs_ * m_);
         for (int i = 0; i < m_; ++i) { u_.segment(i * n_dofs_, n_dofs_) = u_space_; }
@@ -191,6 +192,8 @@ class fe_ls_fisher_kpp{
 
     template <typename PDEparam> 
     void discretize(PDEparam&& pde_param) {
+
+        
         fe_space_ = const_cast<FeSpace*>(std::addressof(pde_param.fe_space()));   // store fe_space
         fe_space_control_ = const_cast<FeSpaceControl*>(std::addressof(pde_param.fe_space_control()));   // store fe_space
         
@@ -212,7 +215,7 @@ class fe_ls_fisher_kpp{
         m_lump = M_.diagonal() ;//*vector_t::Ones(n_dofs_);
         M_lump = sparse_matrix_t(n_dofs_, n_dofs_);
         for(int i = 0; i<n_dofs_; ++i) M_lump.insert(i,i) = m_lump[i];
-
+        
         n_dofs_control_ =  fe_space_control_->n_dofs();
         TrialFunction qh(*fe_space_control_);
         TestFunction ph(*fe_space_control_);
@@ -236,12 +239,16 @@ class fe_ls_fisher_kpp{
         s_ = pde_param.ic();
         max_iter_ = pde_param.max_iter();
         tol_ = pde_param.tol();
+        
 	return;
     }
 
     // fit from formula
     template <typename GeoFrame, typename WeightMatrix>
     void analyze_data(const std::string& formula, const GeoFrame& gf, const WeightMatrix& W) {
+
+        // ANALYZE DATA viene eseguito dopo discretize ?! 
+        std::cout << "ANALYZE DATA" << std::endl;
         fdapde_static_assert(GeoFrame::Order == 2, THIS_CLASS_IS_FOR_ORDER_ONE_GEOFRAMES_ONLY);
         fdapde_assert(gf.n_layers() == 1 && gf[0].category()[1] == ltype::point);
         n_obs_ = gf[0].rows();
@@ -251,6 +258,7 @@ class fe_ls_fisher_kpp{
         const auto& time_index = geo_index_cast<1, POINT>(gf[0]);
         const auto& time_coords = time_index.coordinates();
         m_ = time_coords.rows();
+        std::cout << "m_" << m_ << std::endl;
         fdapde_assert(m_ > 0 && time_coords.cols() == 1);
         DeltaT_ = time_coords(1, 0) - time_coords(0, 0);
         for (int i = 1; i < m_ - 1; ++i) {
@@ -351,15 +359,18 @@ class fe_ls_fisher_kpp{
                 //
                 vector_t p__ = model_->adjoint(f__); // lambda_
 
-                block_map_t g(tmp, model_->n_dofs_control());
-                block_map_t p(p__, model_->n_dofs());
+                // block_map_t g(tmp, model_->n_dofs_control());
+                // block_map_t p(p__, model_->n_dofs());
                 
-                vector_t grad__ = vector_t::Zero(model_->m() * model_->n_dofs_control());
-                block_map_t grad(grad__, model_->n_dofs_control());
+                // vector_t grad__ = vector_t::Zero(model_->m() * model_->n_dofs_control());
+                // block_map_t grad(grad__, model_->n_dofs_control());
 
-                for (int t = 0; t < model_->m(); ++t){ grad(t) = lambda_ * model_->mass_control()* g(t) - model_->control_to_state().transpose() * p(t);} 
-             
-                return grad__;
+                // for (int t = 0; t < model_->m(); ++t){ grad(t) = lambda_ * model_->deltaT() *model_->mass_control()* g(t) -  model_->control_to_state().transpose() * p(t);} 
+                // std::cout << "grad norm " << grad__.norm() << std::endl;
+                
+                vector_t grad = lambda_ * model_->deltaT() * model_->mass_time() * g__ - model_->control_to_state_time().transpose() * p__;
+                
+                return grad;
             };
         }
 
@@ -370,6 +381,7 @@ class fe_ls_fisher_kpp{
 
             vector_t grad_old = this->gradient()(opt.x_old);
             vector_t grad_new = this->gradient()(opt.x_new);
+            //std::cout << "ma vieni chiamato? " << std::abs((loss_new - loss_old) / loss_old) << std::endl;
             stop = std::abs((loss_new - loss_old) / loss_old) < tol_; //&& grad_new.norm() < 100*tol_; // (grad_old-grad_new).norm()/grad_old.norm() < tol_;
             
             return stop;
@@ -381,19 +393,19 @@ class fe_ls_fisher_kpp{
     };
    private:
     vector_t state(vector_t& g__) {
-        
         TrialFunction uh(*fe_space_);
         TestFunction vh(*fe_space_);
  
-        vector_t f__ = vector_t::Zero(n_dofs_ * m_);
+        vector_t f__ = vector_t::Zero(n_dofs_ * (m_));
+        f__.head(n_dofs_) = s_;
+
         block_map_t f(f__, n_dofs_);
         block_map_t g(g__, n_dofs_control_);
         
         FeFunction<FeSpace> f_old(*fe_space_, s_);
         auto reac = integral(fe_space_->triangulation())(reaction_ * f_old * uh * vh);
-        for (int t = 0; t < m_; ++t) {
-
-            if(t!=0) f_old = f(t-1);
+        for (int t = 0; t < m_-1; ++t) {
+            f_old = f(t);
             
             auto R_ = reac.assemble();
             R_.makeCompressed();
@@ -408,22 +420,22 @@ class fe_ls_fisher_kpp{
 
             sparse_solver_t lin_solver(S);
             lin_solver.factorize(S);
-            vector_t b = 1. / DeltaT_ * M_ * f_old.coeff() + B * g(t); //+ F_;
-            f(t) = lin_solver.solve(b);
+            vector_t b = 1. / DeltaT_ * M_ * f_old.coeff() + B * g(t+1); //+ F_;
+            f(t+1) = lin_solver.solve(b);
         }
         return f__;
     }
 
     // adjoint DEVE dipendere da lambda ?!
     vector_t adjoint(vector_t& f__, double lambda=1.0) {
-        
         TrialFunction uh(*fe_space_);
         TestFunction vh(*fe_space_);
 
         FeFunction<FeSpace> f_old(*fe_space_);
         auto reac = integral(fe_space_->triangulation())(reaction_ * f_old * uh * vh);
 
-        vector_t p__ = vector_t::Zero(n_dofs_ * m_);
+        vector_t p__ = vector_t::Zero(n_dofs_ * (m_));
+
         block_map_t p(p__, n_dofs_);
         block_map_t f(f__, n_dofs_);
         block_map_t y(y_, n_);
@@ -432,14 +444,11 @@ class fe_ls_fisher_kpp{
         auto PsiNA = [&](int t) -> const sparse_matrix_t& { return B_.size() != 0 ? B_[t] : Psi_; };
         auto W = [&](int i) { return W_.block(i * n_, i * n_, n_, n_); };
         vector_t p_next = vector_t::Zero(n_dofs_); 
-        sparse_matrix_t Im(m_,m_);
-        Im.setIdentity();
-        auto Mt = kronecker(Im, M_);
-        auto PsiT = kronecker(Im, Psi_);
-        for (int t = m_-1; t >=0; --t) {
-            
-            f_old = t == 0 ? s_ : f(t-1);  
-            if(t != (m_-1)) p_next = p(t+1);
+        for (int t = m_-1; t >0; --t) {
+
+            f_old = f(t-1);  
+            //if(t != (m_-1)) p_next = p(t+1);
+            p_next = p(t);
 
             auto R_ = reac.assemble();
             R_.makeCompressed();
@@ -456,11 +465,10 @@ class fe_ls_fisher_kpp{
             sparse_solver_t lin_solver(S);
             lin_solver.factorize(S);
             
-            vector_t b = lambda / DeltaT_ * M_ * p_next + 1./(m_*n_)*PsiNA(t).transpose() * D_ * W(t) * (y(t) - PsiNA(t) * f(t));             
+            vector_t b = lambda / DeltaT_ * M_ * p_next + 1./(m_*n_)*PsiNA(t-1).transpose() * D_ * W(t-1) * (y(t-1) - PsiNA(t-1) * f(t-1));             
 
-            p(t) = lin_solver.solve(b);
+            p(t-1) = lin_solver.solve(b);
         }
-        
         return p__;
     }
    public:
@@ -468,6 +476,16 @@ class fe_ls_fisher_kpp{
     template <typename Optimizer, typename... Callbacks>
     const vector_t& fit(double lambda, const vector_t& g_init, Optimizer&& opt, Callbacks&&... callbacks) {
         
+        //std::cout << "tol " << tol_ << std::endl;
+        //std::cout << "m_ " << m_ << std::endl;
+
+        sparse_matrix_t Im(m_,m_);
+        Im.setIdentity();
+        M_time_ = kronecker(Im, M_);
+        M_time_.leftCols(n_dofs_) = 0.5*M_;
+        M_time_.rightCols(n_dofs_) = 0.5*M_;
+        B_time = kronecker(Im, B);
+
         g_ = opt.optimize(obj_t(*this, lambda, tol_), g_init, std::forward<Callbacks>(callbacks)...);
         f_ = state(g_);
         p_ = adjoint(f_); // lambda
@@ -487,6 +505,7 @@ class fe_ls_fisher_kpp{
     int n() const { return n_; }
     int m() const { return m_; }
     const sparse_matrix_t& mass() const { return M_; }
+    const sparse_matrix_t& mass_time () const {return M_time_;}
     const sparse_matrix_t& mass_lump() const { return M_lump; }   
     const sparse_matrix_t& stiff() const { return A_; }
     const sparse_matrix_t& Psi() const { return Psi_; }
@@ -496,7 +515,9 @@ class fe_ls_fisher_kpp{
     const vector_t& misfit() const { return g_; }
     const vector_t& response() const { return y_; }
     const sparse_matrix_t& control_to_state() const {return B;}
+    const sparse_matrix_t& control_to_state_time() const {return B_time;}
     const sparse_matrix_t& mass_control() const {return N_;}
+    double deltaT() const { return DeltaT_; }
     //Triangulation& triangulation() const { return *(fe_space_).triangulation();}
     //FeSpace* fe_space() const { return fe_space_; }
 
@@ -529,13 +550,15 @@ class fe_ls_fisher_kpp{
     
     vector_t m_lump;        // m_lump_i = sum_j M(i,j) = M * Ones(n_dofs_,1) 
     sparse_matrix_t M_lump; // 
-
+    sparse_matrix_t M_time_;
     sparse_matrix_t A_;     // n_dofs x n_dofs matrix [R1]_{ij} = \int_D a(\psi_i, \psi_j)
     sparse_matrix_t R_;     // n_dofs x n_dofs matrix [R]_{ij} = \int_D (r * \f \psi_i * \psi_j) // non linear reaction
     sparse_matrix_t Psi_;   // n_obs x n_dofs matrix [Psi]_{ij} = \psi_j(p_i)
     
     sparse_matrix_t N_;
     sparse_matrix_t B;
+    sparse_matrix_t B_time;
+
     std::vector<sparse_matrix_t> B_;   // m x (n_obs x n_obs) vector of na-corrected \Psi matrices
     vector_t u_, u0_;                  // (n_dofs * m) x 1 vector u = [u_1 + + M_*s / DeltaT, u_2, \ldots, u_n]
     vector_t u_space_;

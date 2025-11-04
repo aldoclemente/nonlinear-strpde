@@ -243,3 +243,17 @@ expand_grid(const std::vector<Eigen::Matrix<T, Eigen::Dynamic, 1>>& factors) {
     }
     return M;
 }
+
+void appendBlockTriplets(const Eigen::SparseMatrix<double>& S,
+                         std::vector<Eigen::Triplet<double, Eigen::Index>>& T,
+                         Eigen::Index rowOffset, Eigen::Index colOffset)
+{
+    // Works for RowMajor or ColMajor (outerSize adapts)
+    for (Eigen::Index k = 0; k < S.outerSize(); ++k) {
+        for (typename Eigen::SparseMatrix<double>::InnerIterator it(S, k); it; ++it) {
+            T.emplace_back(rowOffset + it.row(),
+                           colOffset + it.col(),
+                           it.value());
+        }
+    }
+}
