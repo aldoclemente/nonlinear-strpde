@@ -264,7 +264,7 @@ int main(int argc, char *argv[]){
     std::string sim = std::string(argv[2]); // 0, ..., 29
     std::string sim_dir = data_dir + n_locs  + "/" + sim + "/";
 
-    std::string output_dir = "output/" +  n_locs  + "/" + sim + "/";
+    std::string output_dir = "output-ic-esatta/" +  n_locs  + "/" + sim + "/";
     std::string command_str = "mkdir -p " + output_dir;
     system(command_str.c_str());
 
@@ -298,11 +298,14 @@ int main(int argc, char *argv[]){
     auto a = integral(unit_square)(mu * dot(grad(u), grad(v))); 
     auto F = integral(unit_square)(f * v);
 
-    vector_t lambdas = vector_t::Ones(9);
-    lambdas << 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3;
+    //vector_t lambdas = vector_t::Ones(17);
+    //lambdas << 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1, 1, 5, 1e1, 5e1, 1e2, 5e2, 1e3;
     
-    vector_t reactions = vector_t::Ones(5);
-    reactions << 0., 0.5, 1.0, 1.5, 2.0;
+    vector_t lambdas = vector_t::Ones(2);
+    lambdas << 100., 1000.;
+
+    vector_t reactions = vector_t::Ones(4);
+    reactions << 0.5, 1.0, 1.5, 2.0;
 
     // ---------------------------------------------------------------------------------------------------------------------------
     Eigen::Matrix<double, Dynamic,2> grid = expand_grid( std::vector<vector_t>{lambdas, reactions} );
@@ -387,7 +390,6 @@ int main(int argc, char *argv[]){
 
     Eigen::saveMarket(optimum, output_dir + "cv_optim.mtx");
 
-    
     auto model = fe_fisher_kpp(unit_square, mu, optimum[1], locs, time_mesh,
                              obs.reshaped());
 
@@ -407,7 +409,21 @@ int main(int argc, char *argv[]){
     Eigen::saveMarket(rmse, output_dir + "rmse_iterative.mtx");
     Eigen::saveMarket(model.y(), output_dir + "estimate_iterative.mtx");
 
-    // ----
+    // ------------------------------------------------------------------------------------------------------
+    Eigen::Matrix<double, Dynamic,2> grid_para = expand_grid( std::vector<vector_t>{lambdas, vector_t::Zero(1)} );
+    std::cout << grid_para << std::endl;
+    GridSearch<2> optimizer_para;
+    optimizer_para.optimize(SSE, grid_para); 
+
+    std::cout << "opt " << optimizer_para.optimum() << std::endl;    
+    std::cout << "values " << optimizer_para.values() << std::endl;
+    values = vector_t::Zero(optimizer_para.values().size());
+    for(int i = 0; i < optimizer_para.values().size(); ++i) values[i] = optimizer_para.values()[i];
+    Eigen::saveMarket(values, output_dir + "cv_errors_para.mtx");
+    optimum << optimizer_para.optimum()[0], optimizer_para.optimum()[1];
+    Eigen::saveMarket(optimum, output_dir + "cv_optim_para.mtx");
+    
+    // ---- output kFold 
 
     vector_t response = obs.rightCols(n_times - 1).reshaped();
     GeoFrame data(unit_square, T);
@@ -415,6 +431,21 @@ int main(int argc, char *argv[]){
     l.load_vec("y", response);
     SRPDE parabolic("y ~ f", data, fe_ls_parabolic_mono(std::pair{a, F}, IC));
 
+    parabolic.fit( std::vector<double>{ optimum[0], 1.0} );
+    test_vals = Psi_test * parabolic.f();
+    rmse[0] = std::sqrt( (test_vals - test_obs.reshaped()).array().square().mean());
+
+    std::cout << "rmse (para)" << rmse << std::endl;
+    Eigen::saveMarket(rmse, output_dir + "rmse_diff_kfold.mtx");
+    
+    vector_t tmp = vector_t::Zero(n_dofs*n_times);
+    tmp.head(n_dofs) = IC;
+    tmp.tail(n_dofs*(n_times-1)) = parabolic.f();
+
+    Eigen::saveMarket(tmp, output_dir + "estimate_diff_kfold.mtx");
+
+
+   // ---- output GCV 
     vector_t exps = vector_t::LinSpaced(100,-6,0);
     int n_lambda = exps.size();
     matrix_t lambda_grid = matrix_t::Ones(n_lambda, 2);
@@ -442,7 +473,7 @@ int main(int argc, char *argv[]){
     std::cout << "rmse (para)" << rmse << std::endl;
     Eigen::saveMarket(rmse, output_dir + "rmse_diffusion.mtx");
     
-    vector_t tmp = vector_t::Zero(n_dofs*n_times);
+    tmp = vector_t::Zero(n_dofs*n_times);
     tmp.head(n_dofs) = IC;
     tmp.tail(n_dofs*(n_times-1)) = parabolic.f();
 

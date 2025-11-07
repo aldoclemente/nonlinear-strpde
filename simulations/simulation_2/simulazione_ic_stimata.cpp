@@ -264,6 +264,10 @@ int main(int argc, char *argv[]){
     std::string sim = std::string(argv[2]); // 0, ..., 29
     std::string sim_dir = data_dir + n_locs  + "/" + sim + "/";
 
+    std::string output_dir = "output-ic-stimata/" +  n_locs  + "/" + sim + "/";
+    std::string command_str = "mkdir -p " + output_dir;
+    system(command_str.c_str());
+
     auto nodes = read_mtx<double>(mesh_dir + "points.mtx");
     auto cells = read_mtx<int>(mesh_dir + "cells.mtx");
     auto boundary = read_mtx<int>(mesh_dir + "boundary.mtx");
@@ -285,17 +289,38 @@ int main(int argc, char *argv[]){
     matrix_t obs = read_mtx<double>(sim_dir + "obs.mtx");
     
     matrix_t exact = read_mtx<double>(data_dir + "fisher_kpp.mtx"); 
-    vector_t IC = exact.col(0);
-
+    
     double mu = 0.01; // 0.001
     
     int n_dofs = nodes.rows();
     vector_t g_init = vector_t::Random(n_dofs*time_mesh.size()); // + vector_t::Ones(n_dofs*time_locs.size()));
     auto a = integral(unit_square)(mu * dot(grad(u), grad(v))); 
     auto F = integral(unit_square)(f * v);
+    auto mass = integral(unit_square)(u*v).assemble();
+    // IC estimate -----------------------------------------------------------------------------------------------
+    auto a_IC = integral(unit_square)(dot(grad(u), grad(v))); 
+    vector_t exps = vector_t::LinSpaced(100,-6,0);
+    int n_lambda = exps.size();
+    vector_t lambda_grid_IC = vector_t::Ones(n_lambda);
+    for(int i=0; i<n_lambda;++i) lambda_grid_IC[i] = std::pow(10, exps[i]);
+    
+    vector_t response_IC = obs.col(0);
+    GeoFrame data_IC(unit_square);
+    auto &l_IC = data_IC.insert_scalar_layer<POINT>("layer", locs);
+    l_IC.load_vec("y", response_IC);
+    SRPDE elliptic("y ~ f", data_IC, fe_ls_elliptic(a_IC, F));
+    
+    GridSearch<1> optimizer_IC;
+    optimizer_IC.optimize(elliptic.gcv(100, 476813), lambda_grid_IC);
+    std::cout << "IC opt " << optimizer_IC.optimum().transpose() << std::endl;
+    elliptic.fit(optimizer_IC.optimum());
 
-    vector_t lambdas = vector_t::Ones(2);
-    lambdas << 1e1, 1e2;
+    vector_t IC = elliptic.f();
+    std::cout << "||e_IC||_L2^2 " <<  ((IC- exact.col(0)).transpose() * (mass*(IC- exact.col(0))))(0,0)<< std::endl;
+    Eigen::saveMarket(IC, output_dir + "ic_estimate.mtx");
+    // -----------------------------------------------------------------------------------------------------------
+    vector_t lambdas = vector_t::Ones(17);
+    lambdas << 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1, 1, 5, 1e1, 5e1, 1e2, 5e2, 1e3;
     
     vector_t reactions = vector_t::Ones(5);
     reactions << 0., 0.5, 1.0, 1.5, 2.0;
@@ -305,16 +330,12 @@ int main(int argc, char *argv[]){
 
     std::cout << grid.transpose() << std::endl;
     
-    std::string output_dir = "output/" +  n_locs  + "/" + sim + "/";
-    std::string command_str = "mkdir -p " + output_dir;
-    system(command_str.c_str());
     Eigen::saveMarket(grid, output_dir + "cv_grids.mtx");
 
     int K = 10;
     KFoldCV cv_(locs, obs, K);
     vector_t cv_error = vector_t::Ones(K);
 
-    auto mass = integral(unit_square)(u*v).assemble();
     sparse_matrix_t Im(n_times-1, n_times-1);
     Im.setIdentity();
     sparse_matrix_t Mt = kronecker(Im,mass);
@@ -414,21 +435,12 @@ int main(int argc, char *argv[]){
     l.load_vec("y", response);
     SRPDE parabolic("y ~ f", data, fe_ls_parabolic_mono(std::pair{a, F}, IC));
 
-    vector_t exps = vector_t::LinSpaced(100,-6,1);
-    int n_lambda = exps.size();
     matrix_t lambda_grid = matrix_t::Ones(n_lambda, 2);
-    for(int i=0; i<n_lambda;++i) lambda_grid.col(0)[i] = std::pow(10, exps[i]);
+    lambda_grid.col(0) = lambda_grid_IC;
+    //for(int i=0; i<n_lambda;++i) lambda_grid.col(0)[i] = std::pow(10, exps[i]);
     
     GridSearch<2> optimizer_par;
     optimizer_par.optimize(parabolic.gcv(100, 476813), lambda_grid);
-    parabolic.fit(optimizer_par.optimum()); 
-    result = Psi_test * parabolic.f();
-    test_vals = Psi_test * result;
-    rmse[0] = std::sqrt( (test_vals - test_obs.reshaped()).array().square().mean());
-
-    std::cout << "rmse (para)" << rmse << std::endl;
-    Eigen::saveMarket(rmse, output_dir + "rmse_diffusion.mtx");
-    Eigen::saveMarket(model.y(), output_dir + "estimate_diffusion.mtx");
 
     std::cout << "opt " << optimizer_par.optimum() << std::endl;    
     std::cout << "values " << optimizer_par.values() << std::endl;
@@ -439,6 +451,21 @@ int main(int argc, char *argv[]){
 
     optimum << optimizer_par.optimum()[0], optimizer_par.optimum()[1];
     Eigen::saveMarket(optimum, output_dir + "gcv_diff_optim.mtx");
+
+
+    parabolic.fit(optimizer_par.optimum());
+
+    test_vals = Psi_test * parabolic.f();
+    rmse[0] = std::sqrt( (test_vals - test_obs.reshaped()).array().square().mean());
+
+    std::cout << "rmse (para)" << rmse << std::endl;
+    Eigen::saveMarket(rmse, output_dir + "rmse_diffusion.mtx");
+    
+    vector_t tmp = vector_t::Zero(n_dofs*n_times);
+    tmp.head(n_dofs) = IC;
+    tmp.tail(n_dofs*(n_times-1)) = parabolic.f();
+
+    Eigen::saveMarket(tmp, output_dir + "estimate_diffusion.mtx");
 
     return 0;
 }
