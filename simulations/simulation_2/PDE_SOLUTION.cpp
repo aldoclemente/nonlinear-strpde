@@ -161,6 +161,11 @@ int main (){
         Eigen::saveMarket(test_obs, mesh_dir + "test_obs.mtx");
         Eigen::saveMarket(test_locs, mesh_dir + "test_locs.mtx");
 
+        test_obs = matrix_t::Zero(test_locs.rows(), n_times); 
+        for(int t = 0; t<n_times; ++t) test_obs.col(t) = psi_test * diffusion.col(t);
+
+        Eigen::saveMarket(test_obs, mesh_dir + "test_obs-diffusion.mtx");
+        
 
     command_str = "chown -R 1000:1000 " + data_dir; 
     system(command_str.c_str());
