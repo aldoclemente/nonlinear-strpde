@@ -1,6 +1,6 @@
 
 args = commandArgs(trailingOnly = T)
-if(length(args) == 0) stop("Pass 'esatta' or 'stimata' as argument")
+if(length(args) == 0) stop("Pass 'esatta', 'lineare' or 'stimata' as argument")
 
 library(fdaPDE)
 library(ggplot2)
@@ -30,15 +30,18 @@ reactions = matrix(nrow = 30, ncol=length(locs))
 for(j in 1:length(locs)){
   for(i in 1:30){
     if(args[1] == "esatta"){
-      outdir = paste0("output/", locs[j], "/", i-1, "/")
+      outdir = paste0("output-ic-esatta/", locs[j], "/", i-1, "/")
       outdir_tps = paste0("output-tps/",locs[j], "/", i-1, "/")
-    }else{
+    }else if(args[1] == "stimata"){
       outdir = paste0("output-ic-stimata/", locs[j], "/", i-1, "/")
       outdir_tps = paste0("output-tps-ic-stimata/",locs[j], "/", i-1, "/")
+    }else if(args[1] == "lineare"){
+      outdir = paste0("output-ic-esatta-diffusion/", locs[j], "/", i-1, "/")
+      outdir_tps = paste0("output-tps/",locs[j], "/", i-1, "/")
     }
     reactions[i,j] = readMM(paste0(outdir, "cv_optim.mtx"))[2]
     err_nonlin = readMM(paste0(outdir, "rmse_iterative.mtx"))[1]
-    err_par = readMM(paste0(outdir, "rmse_diffusion.mtx"))[1]
+    err_par = readMM(paste0(outdir, "rmse_diff_kfold.mtx"))[1]
     err_tps = readMM(paste0(outdir_tps, "rmse_tps.mtx"))[1]
     
     rmse = rbind(rmse, data.frame(rmse=err_nonlin, method="nonlinear", n_obs=locs[j]))
@@ -47,6 +50,15 @@ for(j in 1:length(locs)){
   }
 }
 
+if(args[1] %in% c("esatta", "stimata")){
+  print("% reaction == 1")
+  tmp = apply( reactions,MARGIN = 2,FUN = function(x){ sum(x == 1)/length(x)})
+  print(data.frame(locs=locs, perc=tmp))
+}else if(args[1] == "lineare"){
+  print("% reaction != 0")
+  tmp = apply( reactions,MARGIN = 2,FUN = function(x){ sum(x == 0)/length(x)})
+  print(data.frame(locs=locs, perc=tmp))
+}
 head(rmse)
 
 myblue = rgb(23,55,94, maxColorValue = 255)
@@ -54,11 +66,12 @@ myred = colorspace::lighten(myblue, amount = 0.35)
 mygreen = colorspace::lighten(myblue, amount = 0.9)
 
 for(j in 1:length(locs)){
-  
   if(args[1] == "esatta"){
-    outdir = paste0("output/", locs[j], "/")
+    outdir = paste0("output-ic-esatta/", locs[j], "/")
   }else if(args[1] == "stimata"){
     outdir = paste0("output-ic-stimata/", locs[j], "/")
+  }else if(args[1] == "lineare"){
+    outdir = paste0("output-ic-esatta-diffusion/", locs[j], "/")
   }
   
   rmse2 = rmse %>% filter(n_obs == locs[j])
@@ -71,7 +84,15 @@ for(j in 1:length(locs)){
   dev.off()
 }
 
-pdf(ifelse(args[1] == "esatta", "output/rmse-boxplots.pdf", "output-ic-stimata/rmse-boxplots.pdf"))
+
+if(args[1] == "esatta"){
+  outdir = "output-ic-esatta/"
+}else if(args[1] == "stimata"){
+  outdir = "output-ic-stimata/"
+}else if(args[1] == "lineare"){
+  outdir = "output-ic-esatta-diffusion/"
+}
+pdf(paste0(outdir,"rmse-boxplots.pdf"))
 par(xpd=TRUE)
 boxplot(rmse$rmse~ rmse$method + rmse$n_obs,
         col=c(myblue,myred,mygreen), xaxt="n", yaxt="n", ylab="", xlab="")
@@ -80,7 +101,7 @@ axis(1, at = seq(2, 3*length(locs), by = 3),
 axis(2, cex.axis=2.5)
 dev.off()
 
-pdf(ifelse(args[1] == "esatta", "output/rmse-legend.pdf", "output-ic-stimata/rmse-legend.pdf"))
+pdf(paste0(outdir, "rmse-legend.pdf"), width = 14, height = 3)
 plot.new()
 legend(x="center",fill = c(myblue, myred, mygreen),
        horiz = T,
@@ -104,28 +125,39 @@ mycolors<- function(x) {
 n_breaks = 20
 n_bins = 10 
 for(j in 1:length(locs)){
-  if(args[1]=="esatta"){
-    imgdir = paste0("output/", locs[j], "/")
-  }else{
-    imgdir = paste0("output-ic-stimata/", locs[j], "/") 
+  
+  if(args[1] == "esatta"){
+    imgdir = paste0("output-ic-esatta/", locs[j], "/")
+  }else if(args[1] == "stimata"){
+    imgdir = paste0("output-ic-stimata/", locs[j], "/")
+  }else if(args[1] == "lineare"){
+    imgdir = paste0("output-ic-esatta-diffusion/", locs[j], "/")
   }
-  exact_coeff = as.matrix(readMM(paste0(input_dir, "fisher_kpp.mtx")))
+  
+  if(args[1] == "lineare"){
+    exact_coeff = as.matrix(readMM(paste0(input_dir, "diffusion.mtx")))
+  }else{
+    exact_coeff = as.matrix(readMM(paste0(input_dir, "fisher_kpp.mtx")))
+  }
   tps_coeff = matrix(0, nrow=nrow(exact_coeff), ncol=ncol(exact_coeff))
   nonlin_coeff = matrix(0, nrow = nrow(exact_coeff)*ncol(exact_coeff), ncol=1)
   par_coeff = matrix(0, nrow = nrow(exact_coeff)*ncol(exact_coeff), ncol=1)
   
   for(i in 1:30){
     if(args[1] == "esatta"){
-      outdir = paste0("output/", locs[j], "/", i-1, "/")
+      outdir = paste0("output-ic-esatta/", locs[j], "/", i-1, "/")
       outdir_tps = paste0("output-tps/",locs[j], "/", i-1, "/")
-    }else{
+    }else if(args[1] == "stimata"){
       outdir = paste0("output-ic-stimata/", locs[j], "/", i-1, "/")
       outdir_tps = paste0("output-tps-ic-stimata/",locs[j], "/", i-1, "/")
+    }else if(args[1] == "lineare"){
+      outdir = paste0("output-ic-esatta-diffusion/", locs[j], "/", i-1, "/")
+      outdir_tps = paste0("output-tps/",locs[j], "/", i-1, "/")
     }
     
     tps_coeff = tps_coeff + as.matrix(readMM(paste0(outdir_tps, "estimate_tps.mtx"))) / 30
     nonlin_coeff = nonlin_coeff + as.matrix(readMM(paste0(outdir, "estimate_iterative.mtx"))) / 30
-    par_coeff = par_coeff + as.matrix(readMM(paste0(outdir, "estimate_diffusion.mtx"))) / 30
+    par_coeff = par_coeff + as.matrix(readMM(paste0(outdir, "estimate_diff_kfold.mtx"))) / 30
   }
   
   nonlin_coeff = matrix(nonlin_coeff, nrow=nrow(exact_coeff), ncol=ncol(exact_coeff))
