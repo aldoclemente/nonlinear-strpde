@@ -298,14 +298,14 @@ int main(int argc, char *argv[]){
     auto a = integral(unit_square)(mu * dot(grad(u), grad(v))); 
     auto F = integral(unit_square)(f * v);
 
-    //vector_t lambdas = vector_t::Ones(17);
-    //lambdas << 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1, 1, 5, 1e1, 5e1, 1e2, 5e2, 1e3;
+    vector_t lambdas = vector_t::Ones(17);
+    lambdas << 1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1, 1, 5, 1e1, 5e1, 1e2, 5e2, 1e3;
     
-    vector_t lambdas = vector_t::Ones(2);
-    lambdas << 100., 1000.;
+    // vector_t lambdas = vector_t::Ones(1);
+    // lambdas << 100.;
 
-    vector_t reactions = vector_t::Ones(4);
-    reactions << 0.5, 1.0, 1.5, 2.0;
+    vector_t reactions = vector_t::Ones(5);
+    reactions << 0.0, 0.5, 1.0, 1.5, 2.0;
 
     // ---------------------------------------------------------------------------------------------------------------------------
     Eigen::Matrix<double, Dynamic,2> grid = expand_grid( std::vector<vector_t>{lambdas, reactions} );
@@ -410,19 +410,13 @@ int main(int argc, char *argv[]){
     Eigen::saveMarket(model.y(), output_dir + "estimate_iterative.mtx");
 
     // ------------------------------------------------------------------------------------------------------
-    Eigen::Matrix<double, Dynamic,2> grid_para = expand_grid( std::vector<vector_t>{lambdas, vector_t::Zero(1)} );
-    std::cout << grid_para << std::endl;
-    GridSearch<2> optimizer_para;
-    optimizer_para.optimize(SSE, grid_para); 
 
-    std::cout << "opt " << optimizer_para.optimum() << std::endl;    
-    std::cout << "values " << optimizer_para.values() << std::endl;
-    values = vector_t::Zero(optimizer_para.values().size());
-    for(int i = 0; i < optimizer_para.values().size(); ++i) values[i] = optimizer_para.values()[i];
-    Eigen::saveMarket(values, output_dir + "cv_errors_para.mtx");
-    optimum << optimizer_para.optimum()[0], optimizer_para.optimum()[1];
-    Eigen::saveMarket(optimum, output_dir + "cv_optim_para.mtx");
-    
+    vector_t values_para = values.head(lambdas.size());
+    Eigen::Index minRow;
+    values_para.minCoeff(&minRow);
+    double lambda_para = lambdas[minRow]; // !!!!! c'era messo "values" ma ci va "lambdas"
+    std::cout << "opt (para) " << lambda_para << std::endl;
+    std::cout << "values (para) " << values_para << std::endl;
     // ---- output kFold 
 
     vector_t response = obs.rightCols(n_times - 1).reshaped();
@@ -431,7 +425,7 @@ int main(int argc, char *argv[]){
     l.load_vec("y", response);
     SRPDE parabolic("y ~ f", data, fe_ls_parabolic_mono(std::pair{a, F}, IC));
 
-    parabolic.fit( std::vector<double>{ optimum[0], 1.0} );
+    parabolic.fit( std::vector<double>{ lambda_para, 1.0} );
     test_vals = Psi_test * parabolic.f();
     rmse[0] = std::sqrt( (test_vals - test_obs.reshaped()).array().square().mean());
 
